@@ -1,48 +1,38 @@
 package com.example.assistant;
 
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
-import org.springframework.ai.tool.ToolCallbackProvider;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * IT helpdesk assistant. Answers how-to questions from the knowledge base (RAG) and looks
- * up live ticket data through the MCP ticket server (tools).
- */
 @RestController
 class AssistantController {
 
-	private static final String SYSTEM = """
-			You are an IT helpdesk assistant. For how-to and policy questions, answer only from the
-			provided knowledge base context and say so if it does not cover the question.
-			For questions about specific tickets or a customer's tickets, call the ticket tools.
-			Keep answers short and mention ticket ids or KB sources you used.
-			""";
+	private final AssistantService service;
 
-	private final ChatClient chat;
+	private final HelpdeskProperties props;
 
-	AssistantController(ChatClient.Builder builder, VectorStore vectorStore, ToolCallbackProvider mcpTools) {
-		this.chat = builder.defaultSystem(SYSTEM)
-			.defaultAdvisors(QuestionAnswerAdvisor.builder(vectorStore)
-				.searchRequest(SearchRequest.builder().topK(3).similarityThreshold(0.3).build())
-				.build())
-			.defaultToolCallbacks(mcpTools)
-			.build();
+	AssistantController(AssistantService service, HelpdeskProperties props) {
+		this.service = service;
+		this.props = props;
 	}
 
-	record Question(String question) {
+	// Hard upper bound; the configurable helpdesk.max-question-length is checked in the handler.
+	record Question(@NotBlank @Size(max = 10000) String question) {
 	}
 
 	record Answer(String answer) {
 	}
 
 	@PostMapping("/ask")
-	Answer ask(@RequestBody Question q) {
-		return new Answer(chat.prompt().user(q.question()).call().content());
+	Answer ask(@Valid @RequestBody Question q) {
+		if (q.question().length() > props.maxQuestionLength()) {
+			throw new QuestionTooLongException(props.maxQuestionLength());
+		}
+		return new Answer(service.ask(q.question()));
 	}
 
 }

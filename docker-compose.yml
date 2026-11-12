@@ -1,0 +1,46 @@
+# docker compose up --build   (first run pulls llama3.1, ~5 GB)
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes: [ollama:/root/.ollama]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      retries: 10
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama: {condition: service_healthy}
+    environment: {OLLAMA_HOST: "http://ollama:11434"}
+    entrypoint: ["ollama", "pull", "llama3.1"]
+    restart: "no"
+
+  ticket-mcp-server:
+    build: {context: ., args: {MODULE: ticket-mcp-server}}
+    # Not published to the host: only the assistant should reach it.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs localhost:8081/actuator/health/readiness || exit 1"]
+      interval: 10s
+      retries: 10
+
+  assistant:
+    build: {context: ., args: {MODULE: assistant}}
+    depends_on:
+      ticket-mcp-server: {condition: service_healthy}
+      ollama-pull: {condition: service_completed_successfully}
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      TICKETS_MCP_URL: http://ticket-mcp-server:8081
+      HELPDESK_API_KEY: ${HELPDESK_API_KEY:?set HELPDESK_API_KEY}
+    volumes: [models:/models]   # caches the embedding model between restarts
+    ports: ["8080:8080"]   # management port 9090 is intentionally not published
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs localhost:9090/actuator/health/readiness || exit 1"]
+      interval: 15s
+      start_period: 60s
+      retries: 5
+
+volumes:
+  ollama:
+  models:
