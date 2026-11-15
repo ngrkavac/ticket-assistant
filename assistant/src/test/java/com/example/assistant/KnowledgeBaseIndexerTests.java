@@ -24,7 +24,7 @@ class KnowledgeBaseIndexerTests {
 	private final VectorStore store = mock(VectorStore.class);
 
 	private KnowledgeBaseIndexer indexer(String location) {
-		var props = new HelpdeskProperties(null, null, new HelpdeskProperties.Kb(location), 0, 0);
+		var props = new HelpdeskProperties(null, null, new HelpdeskProperties.Kb(location), null, 0, 0);
 		return new KnowledgeBaseIndexer(store, new PathMatchingResourcePatternResolver(), props);
 	}
 

@@ -2,6 +2,7 @@ package com.example.assistant;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
+import org.springframework.ai.mcp.McpToolFilter;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -38,6 +39,16 @@ class ChatConfig {
 				.build())
 			.defaultToolCallbacks(mcpTools)
 			.build();
+	}
+
+	/**
+	 * Hides the request-log server's tools from the model: they are called by {@link RequestLogClient}
+	 * only. Exposing them would let any user read other users' questions or forge log entries.
+	 */
+	@Bean
+	McpToolFilter hideRequestLogTools(HelpdeskProperties props) {
+		String connection = props.requestLog().connection();
+		return (info, tool) -> !RequestLogClient.isConnection(info.clientInfo(), connection);
 	}
 
 }
