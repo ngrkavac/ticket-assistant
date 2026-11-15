@@ -118,6 +118,41 @@ class RequestLogClientTests {
 		assertThat(RequestLogClient.isConnection(null, "requestlog")).isFalse();
 	}
 
+	@Test
+	void recentParsesTheToolResult() {
+		McpSyncClient c = client("requestlog");
+		String json = """
+				[{"id":2,"requestId":"r-2","question":"VPN?","answer":"Restart it.","status":"SUCCESS",
+				  "errorType":null,"durationMs":12,"createdAt":"2026-11-15T10:42:00Z"}]
+				""";
+		when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder()
+			.isError(false)
+			.addContent(new McpSchema.TextContent(json))
+			.build());
+		var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+
+		assertThat(log.recent(5)).containsExactly(
+				new RequestLogClient.LoggedRequest("r-2", "VPN?", "SUCCESS", "2026-11-15T10:42:00Z"));
+		ArgumentCaptor<McpSchema.CallToolRequest> call = ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
+		verify(c).callTool(call.capture());
+		assertThat(call.getValue().name()).isEqualTo("listRecentRequests");
+		assertThat(call.getValue().arguments()).containsEntry("limit", 5);
+	}
+
+	@Test
+	void recentFailsWhenServerErrorsOrLoggingIsDisabled() {
+		McpSyncClient c = client("requestlog");
+		when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
+		var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+		assertThatThrownBy(() -> log.recent(5)).isInstanceOf(RequestLogUnavailableException.class);
+
+		when(c.callTool(any())).thenThrow(new IllegalStateException("connection refused"));
+		assertThatThrownBy(() -> log.recent(5)).isInstanceOf(RequestLogUnavailableException.class);
+
+		var disabled = new RequestLogClient(provider(List.of()), props(false));
+		assertThatThrownBy(() -> disabled.recent(5)).isInstanceOf(RequestLogUnavailableException.class);
+	}
+
 	private static org.springframework.ai.mcp.McpConnectionInfo info(String connection) {
 		return org.springframework.ai.mcp.McpConnectionInfo.builder()
 			.clientInfo(new McpSchema.Implementation("client - " + connection, connection, "1.0.0"))

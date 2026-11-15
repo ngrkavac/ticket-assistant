@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/** Requires header X-API-Key on /ask when helpdesk.security.api-key is configured. */
+/** Requires header X-API-Key on /ask and /requests when helpdesk.security.api-key is configured. */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 class ApiKeyFilter extends OncePerRequestFilter {
@@ -29,7 +29,8 @@ class ApiKeyFilter extends OncePerRequestFilter {
 
 	@Override
 	protected boolean shouldNotFilter(HttpServletRequest request) {
-		return expected == null || !request.getRequestURI().startsWith("/ask");
+		String uri = request.getRequestURI();
+		return expected == null || !(uri.startsWith("/ask") || uri.startsWith("/requests"));
 	}
 
 	@Override

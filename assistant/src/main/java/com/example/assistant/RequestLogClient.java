@@ -6,6 +6,9 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
@@ -24,6 +27,13 @@ import org.springframework.stereotype.Component;
 class RequestLogClient implements DisposableBean {
 
 	static final String TOOL = "logRequest";
+
+	static final String LIST_TOOL = "listRecentRequests";
+
+	private static final ObjectMapper JSON = new ObjectMapper();
+
+	private static final TypeReference<List<LoggedRequest>> LOGGED_REQUESTS = new TypeReference<>() {
+	};
 
 	private static final Logger log = LoggerFactory.getLogger(RequestLogClient.class);
 
@@ -91,6 +101,43 @@ class RequestLogClient implements DisposableBean {
 		}
 		catch (RuntimeException e) {
 			log.warn("Request {} not stored: {}", requestId, e.getClass().getSimpleName());
+		}
+	}
+
+	/** A stored request as shown in the UI history. Answers and error details are deliberately left out. */
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	record LoggedRequest(String requestId, String question, String status, String createdAt) {
+	}
+
+	/**
+	 * Reads the newest stored requests through the {@code listRecentRequests} tool (synchronously).
+	 * @throws RequestLogUnavailableException if logging is disabled or the server fails
+	 */
+	List<LoggedRequest> recent(int limit) {
+		if (client == null) {
+			throw new RequestLogUnavailableException("Request logging is disabled", null);
+		}
+		McpSchema.CallToolResult result;
+		try {
+			result = client.callTool(new McpSchema.CallToolRequest(LIST_TOOL, Map.of("limit", limit)));
+		}
+		catch (RuntimeException e) {
+			throw new RequestLogUnavailableException("listRecentRequests failed", e);
+		}
+		if (Boolean.TRUE.equals(result.isError()) || result.content() == null) {
+			throw new RequestLogUnavailableException("listRecentRequests returned an error", null);
+		}
+		String text = result.content()
+			.stream()
+			.filter(McpSchema.TextContent.class::isInstance)
+			.map(c -> ((McpSchema.TextContent) c).text())
+			.findFirst()
+			.orElseThrow(() -> new RequestLogUnavailableException("listRecentRequests returned no text", null));
+		try {
+			return JSON.readValue(text, LOGGED_REQUESTS);
+		}
+		catch (Exception e) {
+			throw new RequestLogUnavailableException("listRecentRequests returned unexpected content", e);
 		}
 	}
 

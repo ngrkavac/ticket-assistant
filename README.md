@@ -32,6 +32,19 @@ curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: a
 curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: application/json' -d '{"question":"What open tickets does acme have, and how do I fix the first one?"}'
 ```
 
+## Web UI (`ui/`)
+
+Minimal React + TypeScript (Vite) page, built from the Figma frame in `FIGMA_IMPLEMENTATION_PLAN.md`: pick a predefined question, press **Ask**, and see the questions stored in the request log (newest first).
+
+```bash
+cd ui && npm install
+HELPDESK_API_KEY=... npm run dev     # http://localhost:5173 (or put the key in ui/.env.local)
+```
+
+The Vite dev server proxies `/ask` and `/requests` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`) and adds the `X-API-Key` header itself, so the key never reaches the browser. This is a dev-only setup; `npm run build` produces static files in `ui/dist` but serving them in production (and injecting the key) is not set up.
+
+`GET /requests?limit=20` (1-100, same API key as `/ask`) returns `requestId`, `question`, `status`, `createdAt` of the newest requests by calling the request-log server's `listRecentRequests` tool. Answers and error details are not returned. 503 if the log server is unavailable or logging is disabled.
+
 ## Request log
 
 After every `/ask` that reaches the model, the assistant calls the `logRequest` tool on `request-log-mcp-server` (MCP connection `requestlog`) with the request id (same as the `X-Request-Id` header), question, answer, status (`SUCCESS`/`ERROR`), error class and duration. The call runs in the background: if the log server is slow or down, the user still gets the answer and the assistant logs a warning (without the question text). Requests rejected before the model call (401, 400, 429) are not stored. `logRequest` is idempotent per request id.
