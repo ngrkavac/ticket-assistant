@@ -4,6 +4,7 @@ WORKDIR /src
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
 COPY ticket-mcp-server/pom.xml ticket-mcp-server/
+COPY request-log-mcp-server/pom.xml request-log-mcp-server/
 COPY assistant/pom.xml assistant/
 RUN ./mvnw -q -B dependency:go-offline
 COPY . .

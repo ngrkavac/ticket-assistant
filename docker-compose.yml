@@ -24,14 +24,43 @@ services:
       interval: 10s
       retries: 10
 
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: requestlog
+      POSTGRES_USER: requestlog
+      POSTGRES_PASSWORD: ${REQUEST_LOG_DB_PASSWORD:?set REQUEST_LOG_DB_PASSWORD}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    # Not published to the host: only the request-log server should reach it.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U requestlog -d requestlog"]
+      interval: 5s
+      retries: 10
+
+  request-log-mcp-server:
+    build: {context: ., args: {MODULE: request-log-mcp-server}}
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      REQUEST_LOG_DB_URL: jdbc:postgresql://postgres:5432/requestlog
+      REQUEST_LOG_DB_USER: requestlog
+      REQUEST_LOG_DB_PASSWORD: ${REQUEST_LOG_DB_PASSWORD:?set REQUEST_LOG_DB_PASSWORD}
+    # Not published to the host: only the assistant should reach it.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs localhost:8082/actuator/health/readiness || exit 1"]
+      interval: 10s
+      retries: 10
+
   assistant:
     build: {context: ., args: {MODULE: assistant}}
     depends_on:
       ticket-mcp-server: {condition: service_healthy}
+      request-log-mcp-server: {condition: service_healthy}
       ollama-pull: {condition: service_completed_successfully}
     environment:
       OLLAMA_URL: http://ollama:11434
       TICKETS_MCP_URL: http://ticket-mcp-server:8081
+      REQUEST_LOG_MCP_URL: http://request-log-mcp-server:8082
       HELPDESK_API_KEY: ${HELPDESK_API_KEY:?set HELPDESK_API_KEY}
     volumes: [models:/models]   # caches the embedding model between restarts
     ports: ["8080:8080"]   # management port 9090 is intentionally not published
@@ -44,3 +73,4 @@ services:
 volumes:
   ollama:
   models:
+  pgdata:

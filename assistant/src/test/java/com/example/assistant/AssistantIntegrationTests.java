@@ -33,7 +33,8 @@ import org.springframework.test.web.servlet.MockMvc;
  * verify the wiring: KB indexing, retrieval, and that retrieved context reaches the prompt.
  */
 @SpringBootTest(properties = { "spring.ai.model.chat=none", "spring.ai.model.embedding=none",
-		"spring.ai.mcp.client.enabled=false", "helpdesk.security.api-key=k", "management.server.port=" })
+		"spring.ai.mcp.client.enabled=false", "helpdesk.request-log.enabled=false",
+		"helpdesk.security.api-key=k", "management.server.port=" })
 @AutoConfigureMockMvc
 class AssistantIntegrationTests {
 

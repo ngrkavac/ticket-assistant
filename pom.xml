@@ -17,6 +17,7 @@
 
 	<modules>
 		<module>ticket-mcp-server</module>
+		<module>request-log-mcp-server</module>
 		<module>assistant</module>
 	</modules>
 

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tickets": {
+      "type": "sse",
+      "url": "http://localhost:8081/sse"
+    },
+    "requestlog": {
+      "type": "sse",
+      "url": "http://localhost:8082/sse"
+    }
+  }
+}

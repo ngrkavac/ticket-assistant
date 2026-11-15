@@ -35,6 +35,13 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 					"The assistant is busy. Please retry shortly."));
 	}
 
+	@ExceptionHandler(RequestLogUnavailableException.class)
+	ProblemDetail historyUnavailable(RequestLogUnavailableException e) {
+		log.warn("Request history unavailable: {}", e.getMessage(), e.getCause());
+		return ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+				"Request history is temporarily unavailable.");
+	}
+
 	/** Dependencies (LLM, MCP server) failing or timing out: the caller may retry later. */
 	@ExceptionHandler({ RestClientException.class, TransientAiException.class, NonTransientAiException.class,
 			ToolExecutionException.class, McpError.class })
