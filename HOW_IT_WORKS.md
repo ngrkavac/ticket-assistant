@@ -4,7 +4,7 @@ Summary of how the two features are wired in this project. Neither is called dir
 
 ## MCP tools (`TicketTools`)
 
-`getTicket` and `listOpenTickets` are never called directly (only `TicketToolsTests` does). They are found by reflection and exposed over MCP.
+The ticket tools (`listCustomers`, `getTicket`, `listOpenTickets`, `listTickets`, `createTicket`) are never called directly (only `TicketToolsTests` does). They are found by reflection and exposed over MCP.
 
 **On the server (`ticket-mcp-server-java`)**
 - `TicketServerApplication` defines a `ToolCallbackProvider` bean: `MethodToolCallbackProvider.builder().toolObjects(tools).build()`.
@@ -15,18 +15,20 @@ Summary of how the two features are wired in this project. Neither is called dir
 - At startup `spring-ai-starter-mcp-client` connects to `spring.ai.mcp.client.sse.connections.tickets.url`, sends `initialize`, then `tools/list`.
 - It auto-configures a `ToolCallbackProvider` wrapping the discovered tools; `ChatConfig` passes it to `.defaultToolCallbacks(mcpTools)`.
 
-**Per request** ("What is the status of ticket T-1003?")
+**Per request** ("What is the status of globex ticket T-1003?")
 ```
 POST /ask
   -> ChatClient sends to the LLM: system prompt + question + tool definitions
-  -> the model replies with a tool call: getTicket {"id":"T-1003"}
+  -> the model replies with a tool call: getTicket {"customer":"globex","id":"T-1003"}
   -> Spring AI's tool-calling loop finds the matching callback
   -> MCP client sends JSON-RPC "tools/call" over HTTP to the server (port 8081)
-  -> server does Method.invoke(ticketTools, "T-1003")
+  -> server does Method.invoke(ticketTools, "globex", "T-1003")
   -> result serialised to JSON and returned to the model
   -> the model writes the final answer
 ```
 Exceptions thrown by a tool (e.g. `IllegalArgumentException` for a bad id) become an MCP error result that the model can read.
+
+Tickets are stored per customer, and every ticket tool takes the customer name. `getTicket` answers `Ticket <id> not found` when the ticket belongs to a different customer, so one customer's tickets are never visible through another. `createTicket` only accepts known customers and assigns the next global id; created tickets are kept in memory until the server restarts.
 
 **Python and Rust versions.** `ticket-mcp-server-python` and `ticket-mcp-server-rust` serve the same tools on the same port and SSE endpoints, so the client side above does not change. They do not use reflection. The tool definitions (names, descriptions, JSON schemas) are written out by hand to match what Spring AI generates from the `@Tool` annotations. The Python server uses the MCP SDK's low-level `Server` instead of FastMCP, because FastMCP adds an `Error executing tool ...` prefix to error messages. The Rust server implements the SSE transport itself on axum, because the official Rust SDK (`rmcp`) no longer has a server for it. `ticket-mcp-contract-tests` checks that all three behave identically.
 
@@ -102,7 +104,7 @@ curl ──POST /ask──▶ assistant (:8080)
                       │ 1. RAG: QuestionAnswerAdvisor adds matching KB chunks to the prompt
                       │ 2. LLM (Ollama llama3.1) gets the prompt + ticket tool definitions
                       │ 3. model may call a tool ──MCP──▶ ticket-mcp-server-{java|python|rust} (:8081)
-                      │                                   getTicket / listOpenTickets
+                      │                                   ticket tools (getTicket, listTickets, ...)
                       │ 4. model writes the answer ──▶ response + X-Request-Id header
                       │ 5. in the background, app code (not the model) calls
                       └──MCP logRequest──▶ request-log-mcp-server (:8082) ──▶ Postgres request_log
@@ -112,9 +114,9 @@ curl ──POST /ask──▶ assistant (:8080)
 
 | Who calls | Server | Tools | Why |
 |---|---|---|---|
-| The LLM, when it decides to | `tickets` | `getTicket`, `listOpenTickets` | Live ticket data the model doesn't have |
+| The LLM, when it decides to | `tickets` | `listCustomers`, `getTicket`, `listOpenTickets`, `listTickets`, `createTicket` | Live ticket data the model doesn't have, and creating tickets on request |
 | Assistant code, on every request (`RequestLogClient`) | `requestlog` | `logRequest` | Audit trail: question, answer, status, duration |
-| A developer through Claude Code (`.mcp.json`) | both | read tools only | Inspect tickets and logs; `logRequest` is denied in `.claude/settings.json` |
+| A developer through Claude Code (`.mcp.json`) | both | read tools only | Inspect tickets and logs; `logRequest` and `createTicket` are denied in `.claude/settings.json` |
 
 ### 1. Start the stack
 
@@ -145,7 +147,9 @@ Other questions to try:
 
 | Question | Exercises |
 |---|---|
-| `What is the status of ticket T-1003?` | MCP `getTicket` |
+| `What is the status of globex ticket T-1003?` | MCP `getTicket` |
+| `Which customers do we support, and what tickets does initech have?` | MCP `listCustomers` + `listTickets` |
+| `Create a HIGH priority ticket for initech: the badge reader at the entrance is broken.` | MCP `createTicket` |
 | `My VPN keeps dropping, what should I try?` | RAG only, no tool call |
 | `What open tickets does acme have, and how do I fix the first one?` | RAG + MCP `listOpenTickets` |
 

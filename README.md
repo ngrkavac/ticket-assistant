@@ -5,7 +5,7 @@ an IT helpdesk assistant.
 
 | Module | Role |
 |---|---|
-| `ticket-mcp-server-java` / `-python` / `-rust` (port 8081) | **MCP server** exposing tools `getTicket` and `listOpenTickets` (in-memory demo tickets) over SSE. Three interchangeable implementations of the same contract; run one of them (see [Ticket server implementations](#ticket-server-implementations)) |
+| `ticket-mcp-server-java` / `-python` / `-rust` (port 8081) | **MCP server** exposing per-customer ticket tools `listCustomers`, `getTicket`, `listOpenTickets`, `listTickets` and `createTicket` (in-memory demo tickets for acme, globex and initech) over SSE. Three interchangeable implementations of the same contract; run one of them (see [Ticket server implementations](#ticket-server-implementations)) |
 | `request-log-mcp-server` (port 8082) | **MCP server** backed by a database (PostgreSQL in compose, in-memory H2 by default) that stores every `/ask` request. Tools: `logRequest`, `getRequest`, `listRecentRequests` |
 | `assistant` (port 8080) | **MCP client** + **RAG**: markdown KB in `assistant/src/main/resources/kb` is embedded locally (ONNX, no API key) into an in-memory `SimpleVectorStore`; a local Ollama model (llama3.1, free) answers via `QuestionAnswerAdvisor` and can call the MCP tools |
 
@@ -27,7 +27,7 @@ ollama pull llama3.1                      # ~5 GB, supports tool calling
 # RAG only (answer comes from KB)
 curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: application/json' -d '{"question":"My VPN keeps dropping, what should I try?"}'
 # MCP only (live ticket data)
-curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: application/json' -d '{"question":"What is the status of ticket T-1003?"}'
+curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: application/json' -d '{"question":"What is the status of globex ticket T-1003?"}'
 # Both: RAG + MCP
 curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: application/json' -d '{"question":"What open tickets does acme have, and how do I fix the first one?"}'
 ```
@@ -47,6 +47,20 @@ The ticket MCP server exists in three languages. Each one is its own module with
 ```bash
 cd ticket-mcp-contract-tests && TICKETS_MCP_URL=http://localhost:8081 uv run pytest
 ```
+
+### Tools
+
+Tickets are stored per customer (customer name -> tickets). Customer names are matched case-insensitively after trimming. Ticket ids (`T-1001`, ...) are unique across all customers, but a ticket is only visible through its own customer.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `listCustomers` | none | known customer names, sorted |
+| `getTicket` | `customer`, `id` | the ticket; `Ticket <id> not found` if that customer has no such ticket (also when another customer owns it) |
+| `listOpenTickets` | `customer` | the customer's OPEN and IN_PROGRESS tickets, by id |
+| `listTickets` | `customer`, optional `status` (`OPEN`, `IN_PROGRESS`, `RESOLVED`) | all of the customer's tickets, optionally filtered |
+| `createTicket` | `customer`, `subject` (max 200 characters), `priority` (`LOW`, `MEDIUM`, `HIGH`) | the new OPEN ticket; the server assigns the next id. Only known customers. Created tickets live in memory until restart |
+
+The seed data is 10 tickets (T-1001..T-1010) for acme, globex and initech. `createTicket` is denied for Claude Code in `.claude/settings.json`, so developers get read-only access like the request log.
 
 The expected values come from the original Java server. They include its Java-specific details: `String.trim()` and `isBlank()` semantics, the ASCII-only `\d`, the coercion of JSON numbers and booleans to strings, and a JSON-RPC error for an unknown tool. The Python and Rust code copies these on purpose. CI builds each image, starts it, and runs this suite against it.
 

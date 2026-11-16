@@ -20,37 +20,83 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from ticket_server.tickets import get_ticket, list_open_tickets
+from ticket_server.tickets import (
+    create_ticket,
+    get_ticket,
+    list_customers,
+    list_open_tickets,
+    list_tickets,
+)
 
 SERVER_NAME = "ticket-server"
 SERVER_VERSION = "1.0.0"
 MESSAGE_PATH = "/mcp/message"
 
+_CUSTOMER = {"type": "string", "description": "Customer name, e.g. acme"}
+
+
+def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 TOOLS = [
     types.Tool(
         name="getTicket",
         description=(
-            "Get a support ticket by its id, e.g. T-1001. "
-            "Fails with a message if it does not exist."
+            "Get a support ticket of a customer by its id, e.g. T-1001. "
+            "Fails with a message if the customer has no such ticket."
         ),
-        inputSchema={
-            "type": "object",
-            "properties": {"id": {"type": "string", "description": "Ticket id such as T-1001"}},
-            "required": ["id"],
-            "additionalProperties": False,
-        },
+        inputSchema=_schema(
+            {
+                "customer": _CUSTOMER,
+                "id": {"type": "string", "description": "Ticket id such as T-1001"},
+            },
+            ["customer", "id"],
+        ),
     ),
     types.Tool(
         name="listOpenTickets",
         description="List all open (status OPEN or IN_PROGRESS) tickets of a customer.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "customer": {"type": "string", "description": "Customer name, e.g. acme"}
+        inputSchema=_schema({"customer": _CUSTOMER}, ["customer"]),
+    ),
+    types.Tool(
+        name="listTickets",
+        description="List all tickets of a customer, optionally filtered by status.",
+        inputSchema=_schema(
+            {
+                "customer": _CUSTOMER,
+                "status": {
+                    "type": "string",
+                    "description": "Optional status filter: OPEN, IN_PROGRESS or RESOLVED",
+                },
             },
-            "required": ["customer"],
-            "additionalProperties": False,
-        },
+            ["customer"],
+        ),
+    ),
+    types.Tool(
+        name="listCustomers",
+        description="List the names of all known customers.",
+        inputSchema=_schema({}, []),
+    ),
+    types.Tool(
+        name="createTicket",
+        description=(
+            "Create a new OPEN support ticket for a known customer and return it. "
+            "The ticket id is assigned by the server."
+        ),
+        inputSchema=_schema(
+            {
+                "customer": _CUSTOMER,
+                "subject": {"type": "string", "description": "Short description of the problem"},
+                "priority": {"type": "string", "description": "Priority: LOW, MEDIUM or HIGH"},
+            },
+            ["customer", "subject", "priority"],
+        ),
     ),
 ]
 
@@ -73,11 +119,21 @@ def _as_string(value: Any) -> str | None:
 
 def call(name: str, arguments: dict[str, Any]) -> str:
     """Run a known tool and return its JSON text result; raises ValueError on bad input."""
+
+    def arg(key: str) -> str | None:
+        return _as_string(arguments.get(key))
+
     if name == "getTicket":
-        return _to_json(get_ticket(_as_string(arguments.get("id"))).to_dict())
+        return _to_json(get_ticket(arg("customer"), arg("id")).to_dict())
     if name == "listOpenTickets":
-        tickets = list_open_tickets(_as_string(arguments.get("customer")))
-        return _to_json([t.to_dict() for t in tickets])
+        return _to_json([t.to_dict() for t in list_open_tickets(arg("customer"))])
+    if name == "listTickets":
+        return _to_json([t.to_dict() for t in list_tickets(arg("customer"), arg("status"))])
+    if name == "listCustomers":
+        return _to_json(list_customers())
+    if name == "createTicket":
+        created = create_ticket(arg("customer"), arg("subject"), arg("priority"))
+        return _to_json(created.to_dict())
     raise ValueError(f"Unknown tool: {name}")
 
 

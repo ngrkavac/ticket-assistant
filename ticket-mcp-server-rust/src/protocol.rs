@@ -2,7 +2,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::tickets::{get_ticket, list_open_tickets, ToolError};
+use crate::tickets::{TicketStore, ToolError};
 
 pub const SERVER_NAME: &str = "ticket-server";
 pub const SERVER_VERSION: &str = "1.0.0";
@@ -16,14 +16,18 @@ const INVALID_PARAMS: i64 = -32602;
 
 /// Tool definitions; descriptions and schemas match the Java `@Tool` annotations.
 pub fn tools() -> Value {
+    let customer = json!({"type": "string", "description": "Customer name, e.g. acme"});
     json!([
         {
             "name": "getTicket",
-            "description": "Get a support ticket by its id, e.g. T-1001. Fails with a message if it does not exist.",
+            "description": "Get a support ticket of a customer by its id, e.g. T-1001. Fails with a message if the customer has no such ticket.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"id": {"type": "string", "description": "Ticket id such as T-1001"}},
-                "required": ["id"],
+                "properties": {
+                    "customer": customer,
+                    "id": {"type": "string", "description": "Ticket id such as T-1001"}
+                },
+                "required": ["customer", "id"],
                 "additionalProperties": false
             }
         },
@@ -32,8 +36,45 @@ pub fn tools() -> Value {
             "description": "List all open (status OPEN or IN_PROGRESS) tickets of a customer.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"customer": {"type": "string", "description": "Customer name, e.g. acme"}},
+                "properties": {"customer": customer},
                 "required": ["customer"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "listTickets",
+            "description": "List all tickets of a customer, optionally filtered by status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "customer": customer,
+                    "status": {"type": "string", "description": "Optional status filter: OPEN, IN_PROGRESS or RESOLVED"}
+                },
+                "required": ["customer"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "listCustomers",
+            "description": "List the names of all known customers.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "createTicket",
+            "description": "Create a new OPEN support ticket for a known customer and return it. The ticket id is assigned by the server.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "customer": customer,
+                    "subject": {"type": "string", "description": "Short description of the problem"},
+                    "priority": {"type": "string", "description": "Priority: LOW, MEDIUM or HIGH"}
+                },
+                "required": ["customer", "subject", "priority"],
                 "additionalProperties": false
             }
         }
@@ -42,13 +83,13 @@ pub fn tools() -> Value {
 
 /// Handles one JSON-RPC message (or a batch). Returns the response to send back on the SSE
 /// stream, or `None` for notifications and client responses, which need no answer.
-pub fn handle(message: &Value) -> Option<Value> {
+pub fn handle(store: &TicketStore, message: &Value) -> Option<Value> {
     match message {
         Value::Array(batch) if !batch.is_empty() => {
-            let responses: Vec<Value> = batch.iter().filter_map(handle_one).collect();
+            let responses: Vec<Value> = batch.iter().filter_map(|m| handle_one(store, m)).collect();
             (!responses.is_empty()).then_some(Value::Array(responses))
         }
-        _ => handle_one(message),
+        _ => handle_one(store, message),
     }
 }
 
@@ -57,7 +98,7 @@ pub fn parse_error() -> Value {
     error(Value::Null, PARSE_ERROR, "Parse error", None)
 }
 
-fn handle_one(message: &Value) -> Option<Value> {
+fn handle_one(store: &TicketStore, message: &Value) -> Option<Value> {
     let Some(object) = message.as_object() else {
         return Some(error(Value::Null, INVALID_REQUEST, "Invalid Request", None));
     };
@@ -84,7 +125,7 @@ fn handle_one(message: &Value) -> Option<Value> {
         ),
         "ping" => success(id, json!({})),
         "tools/list" => success(id, json!({"tools": tools()})),
-        "tools/call" => call_tool(id, params),
+        "tools/call" => call_tool(store, id, params),
         _ => error(
             id,
             METHOD_NOT_FOUND,
@@ -94,7 +135,7 @@ fn handle_one(message: &Value) -> Option<Value> {
     })
 }
 
-fn call_tool(id: Value, params: &Map<String, Value>) -> Value {
+fn call_tool(store: &TicketStore, id: Value, params: &Map<String, Value>) -> Value {
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return error(
             id,
@@ -108,12 +149,26 @@ fn call_tool(id: Value, params: &Map<String, Value>) -> Value {
         .get("arguments")
         .and_then(Value::as_object)
         .unwrap_or(&empty);
+    let arg = |key: &str| as_string(arguments.get(key));
 
     let outcome: Result<String, ToolError> = match name {
-        "getTicket" => get_ticket(as_string(arguments.get("id")).as_deref()).map(|t| to_json(&t)),
-        "listOpenTickets" => {
-            list_open_tickets(as_string(arguments.get("customer")).as_deref()).map(|t| to_json(&t))
-        }
+        "getTicket" => store
+            .get_ticket(arg("customer").as_deref(), arg("id").as_deref())
+            .map(|t| to_json(&t)),
+        "listOpenTickets" => store
+            .list_open_tickets(arg("customer").as_deref())
+            .map(|t| to_json(&t)),
+        "listTickets" => store
+            .list_tickets(arg("customer").as_deref(), arg("status").as_deref())
+            .map(|t| to_json(&t)),
+        "listCustomers" => Ok(to_json(&store.list_customers())),
+        "createTicket" => store
+            .create_ticket(
+                arg("customer").as_deref(),
+                arg("subject").as_deref(),
+                arg("priority").as_deref(),
+            )
+            .map(|t| to_json(&t)),
         // Same JSON-RPC error the Java (Spring AI) server sends for an unknown tool.
         _ => {
             return error(
@@ -167,12 +222,24 @@ mod tests {
         json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params})
     }
 
-    fn call(name: &str, arguments: Value) -> Value {
-        handle(&request(
-            "tools/call",
-            json!({"name": name, "arguments": arguments}),
-        ))
+    fn handle(message: &Value) -> Option<Value> {
+        super::handle(&TicketStore::new(), message)
+    }
+
+    fn call_on(store: &TicketStore, name: &str, arguments: Value) -> Value {
+        super::handle(
+            store,
+            &request("tools/call", json!({"name": name, "arguments": arguments})),
+        )
         .unwrap()
+    }
+
+    fn call(name: &str, arguments: Value) -> Value {
+        call_on(&TicketStore::new(), name, arguments)
+    }
+
+    fn text(response: &Value) -> &str {
+        response["result"]["content"][0]["text"].as_str().unwrap()
     }
 
     #[test]
@@ -191,20 +258,57 @@ mod tests {
     }
 
     #[test]
-    fn lists_both_tools() {
+    fn lists_all_tools_with_exact_schemas() {
         let response = handle(&request("tools/list", json!({}))).unwrap();
-        let names: Vec<_> = response["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(names, ["getTicket", "listOpenTickets"]);
+        let tools = response["result"]["tools"].as_array().unwrap();
+        let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "getTicket",
+                "listOpenTickets",
+                "listTickets",
+                "listCustomers",
+                "createTicket"
+            ]
+        );
+        let expected_required = [
+            json!(["customer", "id"]),
+            json!(["customer"]),
+            json!(["customer"]),
+            json!([]),
+            json!(["customer", "subject", "priority"]),
+        ];
+        for (tool, required) in tools.iter().zip(expected_required) {
+            assert_eq!(tool["inputSchema"]["type"], "object");
+            assert_eq!(tool["inputSchema"]["required"], required);
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+        }
+    }
+
+    #[test]
+    fn schema_properties_keep_parameter_order() {
+        let tools = tools();
+        let keys = |i: usize| -> Vec<String> {
+            tools[i]["inputSchema"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect()
+        };
+        assert_eq!(keys(0), ["customer", "id"]);
+        assert_eq!(keys(2), ["customer", "status"]);
+        assert_eq!(keys(4), ["customer", "subject", "priority"]);
+        // The serialized form (what clients see) keeps the same order.
+        let create = tools[4]["inputSchema"]["properties"].to_string();
+        let pos = |k: &str| create.find(&format!("\"{k}\"")).unwrap();
+        assert!(pos("customer") < pos("subject") && pos("subject") < pos("priority"));
     }
 
     #[test]
     fn get_ticket_returns_compact_json_in_field_order() {
-        let result = &call("getTicket", json!({"id": "t-1003"}))["result"];
+        let result = &call("getTicket", json!({"customer": "GLOBEX", "id": "t-1003"}))["result"];
         assert_eq!(result["isError"], false);
         assert_eq!(
             result["content"][0]["text"],
@@ -214,25 +318,77 @@ mod tests {
 
     #[test]
     fn tool_failures_are_error_results() {
-        let result = &call("getTicket", json!({"id": "T-9999"}))["result"];
+        let result = &call("getTicket", json!({"customer": "acme", "id": "T-9999"}))["result"];
         assert_eq!(result["isError"], true);
         assert_eq!(result["content"][0]["text"], "Ticket T-9999 not found");
-        let result = &call("getTicket", json!({}))["result"];
+        let response = call("getTicket", json!({"customer": "acme", "id": "T-1003"}));
+        assert_eq!(text(&response), "Ticket T-1003 not found");
+        let response = call("getTicket", json!({"customer": "acme"}));
+        assert_eq!(text(&response), "Invalid ticket id, expected format T-1234");
+        let response = call("getTicket", json!({"id": "T-1001"}));
+        assert_eq!(text(&response), "Customer name is required");
+        let response = call("listTickets", json!({"customer": "nobody", "status": "x"}));
         assert_eq!(
-            result["content"][0]["text"],
-            "Invalid ticket id, expected format T-1234"
+            text(&response),
+            "Invalid status, expected one of OPEN, IN_PROGRESS, RESOLVED"
         );
+        let response = call("createTicket", json!({"customer": " Umbrella "}));
+        assert_eq!(text(&response), "Unknown customer Umbrella");
+    }
+
+    #[test]
+    fn list_tools_return_json_arrays() {
+        assert_eq!(
+            text(&call("listCustomers", json!({}))),
+            r#"["acme","globex","initech"]"#
+        );
+        let response = call(
+            "listTickets",
+            json!({"customer": "initech", "status": "resolved"}),
+        );
+        assert_eq!(
+            text(&response),
+            r#"[{"id":"T-1009","customer":"initech","subject":"Wi-Fi slow in meeting room B","status":"RESOLVED","priority":"LOW"}]"#
+        );
+        let response = call("listTickets", json!({"customer": "nobody"}));
+        assert_eq!(text(&response), "[]");
+    }
+
+    #[test]
+    fn create_ticket_is_visible_to_later_calls_on_the_same_store() {
+        let store = TicketStore::new();
+        let response = call_on(
+            &store,
+            "createTicket",
+            json!({"customer": "Initech", "subject": " Badge reader broken ", "priority": "high"}),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let created = r#"{"id":"T-1011","customer":"initech","subject":"Badge reader broken","status":"OPEN","priority":"HIGH"}"#;
+        assert_eq!(text(&response), created);
+        let response = call_on(
+            &store,
+            "getTicket",
+            json!({"customer": "initech", "id": "T-1011"}),
+        );
+        assert_eq!(text(&response), created);
+        // A different store (another router) does not see it.
+        let response = call("getTicket", json!({"customer": "initech", "id": "T-1011"}));
+        assert_eq!(text(&response), "Ticket T-1011 not found");
     }
 
     #[test]
     fn scalar_arguments_are_coerced_like_java() {
+        assert_eq!(text(&call("listOpenTickets", json!({"customer": 5}))), "[]");
         assert_eq!(
-            call("listOpenTickets", json!({"customer": 5}))["result"]["content"][0]["text"],
-            "[]"
+            call("getTicket", json!({"customer": "acme", "id": 1001}))["result"]["isError"],
+            true
         );
         assert_eq!(
-            call("getTicket", json!({"id": 1001}))["result"]["isError"],
-            true
+            text(&call(
+                "createTicket",
+                json!({"customer": "acme", "subject": "x", "priority": 1})
+            )),
+            "Invalid priority, expected one of LOW, MEDIUM, HIGH"
         );
     }
 

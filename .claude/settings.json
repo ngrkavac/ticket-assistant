@@ -1,7 +1,8 @@
 {
   "permissions": {
     "deny": [
-      "mcp__requestlog__logRequest"
+      "mcp__requestlog__logRequest",
+      "mcp__tickets__createTicket"
     ]
   }
 }

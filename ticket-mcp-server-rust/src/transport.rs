@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::protocol;
+use crate::tickets::TicketStore;
 
 pub const SSE_PATH: &str = "/sse";
 pub const MESSAGE_PATH: &str = "/mcp/message";
@@ -35,6 +36,7 @@ type Sessions = Arc<Mutex<HashMap<String, mpsc::Sender<String>>>>;
 struct AppState {
     sessions: Sessions,
     shutdown: CancellationToken,
+    store: Arc<TicketStore>,
 }
 
 /// Builds the HTTP app. Cancelling `shutdown` ends all open SSE streams, so a graceful
@@ -43,6 +45,7 @@ pub fn router(shutdown: CancellationToken) -> Router {
     let state = AppState {
         sessions: Arc::default(),
         shutdown,
+        store: Arc::new(TicketStore::new()),
     };
     Router::new()
         .route(SSE_PATH, get(open_session))
@@ -119,7 +122,10 @@ async fn receive_message(
     };
 
     let (response, status) = match serde_json::from_slice::<Value>(&body) {
-        Ok(message) => (protocol::handle(&message), StatusCode::ACCEPTED),
+        Ok(message) => (
+            protocol::handle(&state.store, &message),
+            StatusCode::ACCEPTED,
+        ),
         Err(e) => {
             warn!(session = %session_id, error = %e, "invalid JSON-RPC message");
             (Some(protocol::parse_error()), StatusCode::BAD_REQUEST)
