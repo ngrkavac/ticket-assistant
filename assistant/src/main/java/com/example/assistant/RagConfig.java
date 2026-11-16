@@ -13,21 +13,22 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 class RagConfig {
 
-	@Bean
-	VectorStore vectorStore(EmbeddingModel embeddingModel) {
-		return SimpleVectorStore.builder(embeddingModel).build();
-	}
+  @Bean
+  VectorStore vectorStore(EmbeddingModel embeddingModel) {
+    return SimpleVectorStore.builder(embeddingModel).build();
+  }
 
-	@Bean
-	ApplicationRunner indexKnowledgeBase(KnowledgeBaseIndexer indexer) {
-		return args -> indexer.index();
-	}
+  @Bean
+  ApplicationRunner indexKnowledgeBase(KnowledgeBaseIndexer indexer) {
+    return args -> indexer.index();
+  }
 
-	/** Readiness fails until the knowledge base has been indexed. */
-	@Bean
-	HealthIndicator knowledgeBase(KnowledgeBaseIndexer indexer) {
-		return () -> indexer.indexedChunks() > 0 ? Health.up().withDetail("chunks", indexer.indexedChunks()).build()
-				: Health.down().withDetail("reason", "knowledge base not indexed").build();
-	}
-
+  /** Readiness fails until the knowledge base has been indexed. */
+  @Bean
+  HealthIndicator knowledgeBase(KnowledgeBaseIndexer indexer) {
+    return () ->
+        indexer.indexedChunks() > 0
+            ? Health.up().withDetail("chunks", indexer.indexedChunks()).build()
+            : Health.down().withDetail("reason", "knowledge base not indexed").build();
+  }
 }

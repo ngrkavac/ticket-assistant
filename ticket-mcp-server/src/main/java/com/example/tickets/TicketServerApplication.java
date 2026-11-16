@@ -9,14 +9,13 @@ import org.springframework.context.annotation.Bean;
 @SpringBootApplication
 public class TicketServerApplication {
 
-	public static void main(String[] args) {
-		SpringApplication.run(TicketServerApplication.class, args);
-	}
+  public static void main(String[] args) {
+    SpringApplication.run(TicketServerApplication.class, args);
+  }
 
-	/** Registers the @Tool methods of TicketTools as MCP tools. */
-	@Bean
-	ToolCallbackProvider ticketToolCallbacks(TicketTools tools) {
-		return MethodToolCallbackProvider.builder().toolObjects(tools).build();
-	}
-
+  /** Registers the @Tool methods of TicketTools as MCP tools. */
+  @Bean
+  ToolCallbackProvider ticketToolCallbacks(TicketTools tools) {
+    return MethodToolCallbackProvider.builder().toolObjects(tools).build();
+  }
 }

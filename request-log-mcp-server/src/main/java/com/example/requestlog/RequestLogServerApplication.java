@@ -9,14 +9,13 @@ import org.springframework.context.annotation.Bean;
 @SpringBootApplication
 public class RequestLogServerApplication {
 
-	public static void main(String[] args) {
-		SpringApplication.run(RequestLogServerApplication.class, args);
-	}
+  public static void main(String[] args) {
+    SpringApplication.run(RequestLogServerApplication.class, args);
+  }
 
-	/** Registers the @Tool methods of RequestLogTools as MCP tools. */
-	@Bean
-	ToolCallbackProvider requestLogToolCallbacks(RequestLogTools tools) {
-		return MethodToolCallbackProvider.builder().toolObjects(tools).build();
-	}
-
+  /** Registers the @Tool methods of RequestLogTools as MCP tools. */
+  @Bean
+  ToolCallbackProvider requestLogToolCallbacks(RequestLogTools tools) {
+    return MethodToolCallbackProvider.builder().toolObjects(tools).build();
+  }
 }
