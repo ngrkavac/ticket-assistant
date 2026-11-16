@@ -21,7 +21,7 @@ async function send<T>(url: string, init?: RequestInit): Promise<T> {
       // body was not problem+json
     }
     if (res.status === 401) {
-      detail = 'Unauthorized: start the dev server with HELPDESK_API_KEY set.';
+      detail = 'Unauthorized: HELPDESK_API_KEY is not set for the UI server.';
     }
     throw new ApiError(res.status, detail || `Request failed (${res.status}).`);
   }

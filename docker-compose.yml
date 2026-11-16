@@ -93,6 +93,22 @@ services:
       start_period: 60s
       retries: 5
 
+  # Web UI: static build behind nginx, which proxies /ask and /requests to the assistant and adds
+  # the API key server-side. Published on loopback only: anyone who can reach the UI can use the
+  # assistant with that key.
+  ui:
+    build: ./ui
+    depends_on:
+      assistant: {condition: service_healthy}
+    environment:
+      ASSISTANT_URL: http://assistant:8080
+      HELPDESK_API_KEY: ${HELPDESK_API_KEY:?set HELPDESK_API_KEY}
+    ports: ["127.0.0.1:5173:8080"]   # http://localhost:5173, same URL as the Vite dev server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      retries: 5
+
 volumes:
   ollama:
   models:

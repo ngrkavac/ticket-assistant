@@ -75,7 +75,9 @@ cd ui && npm install
 HELPDESK_API_KEY=... npm run dev     # http://localhost:5173 (or put the key in ui/.env.local)
 ```
 
-The Vite dev server proxies `/ask` and `/requests` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`) and adds the `X-API-Key` header itself, so the key never reaches the browser. This is a dev-only setup; `npm run build` produces static files in `ui/dist` but serving them in production (and injecting the key) is not set up.
+The Vite dev server proxies `/ask` and `/requests` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`) and adds the `X-API-Key` header itself, so the key never reaches the browser.
+
+In Docker Compose the UI is the `ui` service, also on http://localhost:5173 (published on loopback only). `ui/Dockerfile` builds the static files and serves them with unprivileged nginx, which does what the dev proxy does: it forwards `/ask` and `/requests` to `assistant:8080` and adds `X-API-Key` from `HELPDESK_API_KEY` at container start (`ui/nginx.conf.template`). Stop `npm run dev` first if it is running, because both use port 5173. Anyone who can reach the UI can use the assistant with that key, so put real authentication in front of it before exposing it beyond localhost.
 
 `GET /requests?limit=20` (1-100, same API key as `/ask`) returns `requestId`, `question`, `status`, `createdAt` of the newest requests by calling the request-log server's `listRecentRequests` tool. Answers and error details are not returned. 503 if the log server is unavailable or logging is disabled.
 
@@ -108,7 +110,7 @@ Java code follows [Google Java Style](https://google.github.io/styleguide/javagu
 | Resilience | Virtual threads, max 8 concurrent LLM calls (`helpdesk.max-concurrent-requests`; extra requests get 429 + `Retry-After`), HTTP connect/read timeouts for the LLM, 20s MCP request timeout, graceful shutdown. LLM/MCP failures map to 503, our own bugs to 500. The assistant needs the MCP server reachable at startup (compose enforces ordering) |
 | Observability | Actuator on a separate management port (`9090`, not published in compose): `health` (liveness/readiness; readiness includes the KB-indexed check), `metrics`, `prometheus`; `X-Request-Id` header and request id in every log line; question text is never written to application logs (it is stored in the request-log database, see above) |
 | Config | Via env: `OLLAMA_URL`, `OLLAMA_MODEL`, `TICKETS_MCP_URL`, `REQUEST_LOG_MCP_URL`, `REQUEST_LOG_ENABLED`, `HELPDESK_API_KEY`, `KB_LOCATION`, `MANAGEMENT_PORT`, `EMBEDDING_CACHE_DIR`; request-log server: `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD` |
-| Packaging | Multi-stage `Dockerfile` for the Java modules (layered jar, non-root user, `--build-arg MODULE=...`); `ticket-mcp-server-python/Dockerfile` and `ticket-mcp-server-rust/Dockerfile` (non-root); `docker-compose.yml` (Ollama, PostgreSQL, request log, assistant, and the ticket server chosen by profile); GitHub Actions CI (Maven, Python, Rust and a contract-test matrix over the three ticket servers) |
+| Packaging | Multi-stage `Dockerfile` for the Java modules (layered jar, non-root user, `--build-arg MODULE=...`); `ticket-mcp-server-python/Dockerfile` and `ticket-mcp-server-rust/Dockerfile` (non-root); `ui/Dockerfile` (static build on unprivileged nginx with the API proxy); `docker-compose.yml` (Ollama, PostgreSQL, request log, assistant, web UI, and the ticket server chosen by profile); GitHub Actions CI (Maven, Python, Rust and a contract-test matrix over the three ticket servers) |
 | Embeddings | ONNX model is cached in `EMBEDDING_CACHE_DIR` (`/models` volume in compose), so restarts do not re-download it. The very first start still needs internet |
 | Tests | `./mvnw test`: tool validation, controller tests (auth, validation, error mapping) and a full-context integration test with fake models (KB indexing, retrieval, context reaching the prompt); no LLM needed. `./mvnw verify` also enforces 80% line coverage (JaCoCo, `*Application` classes excluded); report in `<module>/target/site/jacoco` |
 
@@ -117,6 +119,7 @@ Run everything in containers:
 ```bash
 HELPDESK_API_KEY=change-me REQUEST_LOG_DB_PASSWORD=change-me-too COMPOSE_PROFILES=java docker compose up --build
 curl -s localhost:8080/ask -H 'X-API-Key: change-me' -H 'Content-Type: application/json' -d '{"question":"How do I reset my password?"}'
+open http://localhost:5173   # web UI
 ```
 
 `COMPOSE_PROFILES` picks the ticket server: `java`, `python` or `rust`. Exactly one must be active, because the assistant needs a ticket server at startup. Put `COMPOSE_PROFILES=java` in `.env` to make it the default, and override it per run with `COMPOSE_PROFILES=rust docker compose up --build`. Each implementation answers to the network alias `ticket-mcp-server`. To switch a running stack, run `docker compose down` first so the old server stops.
