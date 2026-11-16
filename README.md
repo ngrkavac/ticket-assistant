@@ -55,6 +55,15 @@ Config: `REQUEST_LOG_MCP_URL` (assistant, default `http://localhost:8082`), `REQ
 
 Add or edit `.md` files in `kb/` to change the knowledge base (re-indexed on each start). To use files outside the jar, set `KB_LOCATION` (`helpdesk.kb.location`), e.g. `KB_LOCATION='file:/data/kb/*.md'` with a mounted volume; no rebuild needed.
 
+## Code formatting
+
+Java code follows [Google Java Style](https://google.github.io/styleguide/javaguide.html), enforced by [google-java-format](https://github.com/google/google-java-format) (version pinned in `pom.xml` as `google-java-format.version`).
+
+- **Pre-commit hook**: enable it once per clone with `git config core.hooksPath .githooks`. It formats the staged `.java` files and re-stages them. The first run downloads the formatter jar into `.git/gjf/`. Files that have both staged and unstaged changes are refused, so unstaged work never slips into a commit. Skip it for one commit with `SKIP_GJF=1 git commit ...`.
+- **Format everything by hand**: `./mvnw com.spotify.fmt:fmt-maven-plugin:format`.
+- **CI**: `./mvnw verify` runs `fmt-maven-plugin:check` and fails on any unformatted file.
+- **Claude Code**: the `google-java-format` skill is in `.claude/skills/`.
+
 ## Production notes
 
 | Area | What is in place |

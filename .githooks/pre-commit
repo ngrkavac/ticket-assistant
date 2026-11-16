@@ -1,0 +1,41 @@
+#!/bin/sh
+# Formats staged .java files with google-java-format (Google Java Style).
+# Enable once per clone:  git config core.hooksPath .githooks
+# Skip for one commit:    SKIP_GJF=1 git commit ...   (or git commit --no-verify)
+
+set -eu
+
+# Keep in sync with <google-java-format.version> in pom.xml
+GJF_VERSION=1.37.0
+
+[ "${SKIP_GJF:-0}" = "1" ] && exit 0
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR -- '*.java')
+[ -z "$staged" ] && exit 0
+
+# Refuse files that also have unstaged changes: re-adding them after formatting
+# would silently commit work you didn't stage.
+partial=$(echo "$staged" | tr '\n' '\0' | xargs -0 git diff --name-only --)
+if [ -n "$partial" ]; then
+  echo "pre-commit: these files have both staged and unstaged changes:" >&2
+  echo "$partial" | sed 's/^/  /' >&2
+  echo "Stage or stash the rest first, or skip with SKIP_GJF=1." >&2
+  exit 1
+fi
+
+cache_dir="$(git rev-parse --git-common-dir)/gjf"
+jar="$cache_dir/google-java-format-$GJF_VERSION-all-deps.jar"
+if [ ! -f "$jar" ]; then
+  mkdir -p "$cache_dir"
+  url="https://repo1.maven.org/maven2/com/google/googlejavaformat/google-java-format/$GJF_VERSION/google-java-format-$GJF_VERSION-all-deps.jar"
+  echo "pre-commit: downloading google-java-format $GJF_VERSION..." >&2
+  curl -sfL "$url" -o "$jar.tmp" && mv "$jar.tmp" "$jar" || {
+    rm -f "$jar.tmp"
+    echo "pre-commit: failed to download $url" >&2
+    exit 1
+  }
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+echo "$staged" | tr '\n' '\0' | xargs -0 java -jar "$jar" --replace
+echo "$staged" | tr '\n' '\0' | xargs -0 git add --
