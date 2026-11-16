@@ -3,7 +3,7 @@ FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
-COPY ticket-mcp-server/pom.xml ticket-mcp-server/
+COPY ticket-mcp-server-java/pom.xml ticket-mcp-server-java/
 COPY request-log-mcp-server/pom.xml request-log-mcp-server/
 COPY assistant/pom.xml assistant/
 RUN ./mvnw -q -B dependency:go-offline

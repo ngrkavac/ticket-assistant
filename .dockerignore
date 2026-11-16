@@ -1,4 +1,6 @@
 **/target
+**/.venv
+**/__pycache__
 .git
 .idea
 *.iml

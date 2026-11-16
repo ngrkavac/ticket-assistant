@@ -1,4 +1,4 @@
-# docker compose up --build   (first run pulls llama3.1, ~5 GB)
+# COMPOSE_PROFILES=java docker compose up --build   (java | python | rust; first run pulls llama3.1, ~5 GB)
 services:
   ollama:
     image: ollama/ollama:latest
@@ -16,13 +16,33 @@ services:
     entrypoint: ["ollama", "pull", "llama3.1"]
     restart: "no"
 
-  ticket-mcp-server:
-    build: {context: ., args: {MODULE: ticket-mcp-server}}
-    # Not published to the host: only the assistant should reach it.
-    healthcheck:
+  # Three interchangeable ticket MCP servers with the same contract (see ticket-mcp-contract-tests).
+  # Exactly one runs, chosen by profile: COMPOSE_PROFILES=java|python|rust (or --profile ...).
+  # Each answers to the network alias "ticket-mcp-server", so the assistant config never changes.
+  # Not published to the host: only the assistant should reach them.
+  ticket-mcp-server-java:
+    profiles: [java]
+    build: {context: ., args: {MODULE: ticket-mcp-server-java}}
+    networks: {default: {aliases: [ticket-mcp-server]}}
+    healthcheck: &ticket-healthcheck
       test: ["CMD-SHELL", "curl -fs localhost:8081/actuator/health/readiness || exit 1"]
       interval: 10s
       retries: 10
+
+  ticket-mcp-server-python:
+    profiles: [python]
+    build: ./ticket-mcp-server-python
+    networks: {default: {aliases: [ticket-mcp-server]}}
+    healthcheck:
+      <<: *ticket-healthcheck
+      # the slim Python image has no curl
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/actuator/health/readiness')"]
+
+  ticket-mcp-server-rust:
+    profiles: [rust]
+    build: ./ticket-mcp-server-rust
+    networks: {default: {aliases: [ticket-mcp-server]}}
+    healthcheck: *ticket-healthcheck
 
   postgres:
     image: postgres:17-alpine
@@ -54,7 +74,10 @@ services:
   assistant:
     build: {context: ., args: {MODULE: assistant}}
     depends_on:
-      ticket-mcp-server: {condition: service_healthy}
+      # only the ticket server of the active profile is started and waited for
+      ticket-mcp-server-java: {condition: service_healthy, required: false}
+      ticket-mcp-server-python: {condition: service_healthy, required: false}
+      ticket-mcp-server-rust: {condition: service_healthy, required: false}
       request-log-mcp-server: {condition: service_healthy}
       ollama-pull: {condition: service_completed_successfully}
     environment:

@@ -6,7 +6,7 @@ Summary of how the two features are wired in this project. Neither is called dir
 
 `getTicket` and `listOpenTickets` are never called directly (only `TicketToolsTests` does). They are found by reflection and exposed over MCP.
 
-**On the server (`ticket-mcp-server`)**
+**On the server (`ticket-mcp-server-java`)**
 - `TicketServerApplication` defines a `ToolCallbackProvider` bean: `MethodToolCallbackProvider.builder().toolObjects(tools).build()`.
 - It scans `TicketTools` for `@Tool` methods. Each becomes a tool definition: name = method name, description = `@Tool(description=...)`, argument JSON schema generated from parameter types and `@ToolParam`.
 - The `spring-ai-starter-mcp-server-webmvc` auto-configuration registers all `ToolCallbackProvider` beans with the MCP server, served at `/sse` and `/mcp/message`.
@@ -27,6 +27,8 @@ POST /ask
   -> the model writes the final answer
 ```
 Exceptions thrown by a tool (e.g. `IllegalArgumentException` for a bad id) become an MCP error result that the model can read.
+
+**Python and Rust versions.** `ticket-mcp-server-python` and `ticket-mcp-server-rust` serve the same tools on the same port and SSE endpoints, so the client side above does not change. They do not use reflection. The tool definitions (names, descriptions, JSON schemas) are written out by hand to match what Spring AI generates from the `@Tool` annotations. The Python server uses the MCP SDK's low-level `Server` instead of FastMCP, because FastMCP adds an `Error executing tool ...` prefix to error messages. The Rust server implements the SSE transport itself on axum, because the official Rust SDK (`rmcp`) no longer has a server for it. `ticket-mcp-contract-tests` checks that all three behave identically.
 
 **Consequences**
 - Descriptions are the API contract: the model only knows what a tool does from `@Tool`/`@ToolParam` text. This matters more with small local models.
@@ -99,7 +101,7 @@ Table `request_log` (Flyway `V1__request_log.sql`): `id`, `request_id` (unique),
 curl ──POST /ask──▶ assistant (:8080)
                       │ 1. RAG: QuestionAnswerAdvisor adds matching KB chunks to the prompt
                       │ 2. LLM (Ollama llama3.1) gets the prompt + ticket tool definitions
-                      │ 3. model may call a tool ──MCP──▶ ticket-mcp-server (:8081)
+                      │ 3. model may call a tool ──MCP──▶ ticket-mcp-server-{java|python|rust} (:8081)
                       │                                   getTicket / listOpenTickets
                       │ 4. model writes the answer ──▶ response + X-Request-Id header
                       │ 5. in the background, app code (not the model) calls
@@ -121,7 +123,7 @@ docker compose up -d --build
 docker compose ps        # all services should be "healthy"
 ```
 
-`.env` must define `HELPDESK_API_KEY` and `REQUEST_LOG_DB_PASSWORD`. The local `docker-compose.override.yml` publishes the MCP servers on `127.0.0.1:8081/8082` so Claude Code can connect. Postgres is never published.
+`.env` must define `HELPDESK_API_KEY` and `REQUEST_LOG_DB_PASSWORD`, plus `COMPOSE_PROFILES=java` (or `python` / `rust`) to choose the ticket server implementation. The local `docker-compose.override.yml` publishes the MCP servers on `127.0.0.1:8081/8082` so Claude Code can connect. Postgres is never published. The override must use the new service names (`ticket-mcp-server-java`, `-python`, `-rust`); give the `127.0.0.1:8081:8081` port to all three, because only the active one is started.
 
 ### 2. Send a request
 

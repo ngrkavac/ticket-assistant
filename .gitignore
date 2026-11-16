@@ -3,3 +3,7 @@ target/
 *.iml
 .env
 docker-compose.override.yml
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

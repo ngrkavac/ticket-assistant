@@ -5,18 +5,18 @@ an IT helpdesk assistant.
 
 | Module | Role |
 |---|---|
-| `ticket-mcp-server` (port 8081) | **MCP server** exposing tools `getTicket` and `listOpenTickets` (in-memory demo tickets) over SSE |
+| `ticket-mcp-server-java` / `-python` / `-rust` (port 8081) | **MCP server** exposing tools `getTicket` and `listOpenTickets` (in-memory demo tickets) over SSE. Three interchangeable implementations of the same contract; run one of them (see [Ticket server implementations](#ticket-server-implementations)) |
 | `request-log-mcp-server` (port 8082) | **MCP server** backed by a database (PostgreSQL in compose, in-memory H2 by default) that stores every `/ask` request. Tools: `logRequest`, `getRequest`, `listRecentRequests` |
 | `assistant` (port 8080) | **MCP client** + **RAG**: markdown KB in `assistant/src/main/resources/kb` is embedded locally (ONNX, no API key) into an in-memory `SimpleVectorStore`; a local Ollama model (llama3.1, free) answers via `QuestionAnswerAdvisor` and can call the MCP tools |
 
-Stack: Java 21, Spring Boot 3.5, Spring AI 1.1.8, Maven, Ollama (no paid API).
+Stack: Java 21, Spring Boot 3.5, Spring AI 1.1.8, Maven, Ollama (no paid API). The alternative ticket servers use Python 3.12 + the MCP Python SDK (uv) and Rust + axum (cargo).
 
 ## Run
 
 ```bash
 brew install ollama && ollama serve &   # or install the Ollama app
 ollama pull llama3.1                      # ~5 GB, supports tool calling
-./mvnw -q -pl ticket-mcp-server spring-boot:run      # terminal 1
+./mvnw -q -pl ticket-mcp-server-java spring-boot:run # terminal 1 (or the Python/Rust server, see below)
 ./mvnw -q -pl request-log-mcp-server spring-boot:run # terminal 2 (in-memory H2 unless REQUEST_LOG_DB_URL is set)
 ./mvnw -q -pl assistant spring-boot:run              # terminal 3 (first start downloads the embedding model)
 ```
@@ -31,6 +31,26 @@ curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: a
 # Both: RAG + MCP
 curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: application/json' -d '{"question":"What open tickets does acme have, and how do I fix the first one?"}'
 ```
+
+## Ticket server implementations
+
+The ticket MCP server exists in three languages. Each one is its own module with its own build tool and Dockerfile. They have the same wire contract (server name `ticket-server`, tool names and schemas, compact JSON results, identical error texts, `/actuator/health/readiness`) and all listen on port 8081, so the assistant and `.mcp.json` work with any of them unchanged.
+
+| Module | Stack | Run locally | Test |
+|---|---|---|---|
+| `ticket-mcp-server-java` | Spring AI (`@Tool` methods), Maven | `./mvnw -q -pl ticket-mcp-server-java spring-boot:run` | `./mvnw -pl ticket-mcp-server-java verify` |
+| `ticket-mcp-server-python` | MCP Python SDK (low-level server) + Starlette/uvicorn, uv | `cd ticket-mcp-server-python && uv run ticket-server` | `uv run pytest && uv run ruff check .` |
+| `ticket-mcp-server-rust` | axum + tokio, hand-written SSE transport, cargo | `cd ticket-mcp-server-rust && cargo run` | `cargo test && cargo clippy` |
+
+`ticket-mcp-contract-tests/` is a black-box test suite that every implementation must pass. It connects over SSE like the assistant does. Start any implementation on :8081, then run:
+
+```bash
+cd ticket-mcp-contract-tests && TICKETS_MCP_URL=http://localhost:8081 uv run pytest
+```
+
+The expected values come from the original Java server. They include its Java-specific details: `String.trim()` and `isBlank()` semantics, the ASCII-only `\d`, the coercion of JSON numbers and booleans to strings, and a JSON-RPC error for an unknown tool. The Python and Rust code copies these on purpose. CI builds each image, starts it, and runs this suite against it.
+
+The Python and Rust servers read `PORT` (default `8081`) and `HOST` (default `0.0.0.0`).
 
 ## Web UI (`ui/`)
 
@@ -74,15 +94,17 @@ Java code follows [Google Java Style](https://google.github.io/styleguide/javagu
 | Resilience | Virtual threads, max 8 concurrent LLM calls (`helpdesk.max-concurrent-requests`; extra requests get 429 + `Retry-After`), HTTP connect/read timeouts for the LLM, 20s MCP request timeout, graceful shutdown. LLM/MCP failures map to 503, our own bugs to 500. The assistant needs the MCP server reachable at startup (compose enforces ordering) |
 | Observability | Actuator on a separate management port (`9090`, not published in compose): `health` (liveness/readiness; readiness includes the KB-indexed check), `metrics`, `prometheus`; `X-Request-Id` header and request id in every log line; question text is never written to application logs (it is stored in the request-log database, see above) |
 | Config | Via env: `OLLAMA_URL`, `OLLAMA_MODEL`, `TICKETS_MCP_URL`, `REQUEST_LOG_MCP_URL`, `REQUEST_LOG_ENABLED`, `HELPDESK_API_KEY`, `KB_LOCATION`, `MANAGEMENT_PORT`, `EMBEDDING_CACHE_DIR`; request-log server: `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD` |
-| Packaging | Multi-stage `Dockerfile` (layered jar, non-root user), `docker-compose.yml` (Ollama, PostgreSQL + all three services), GitHub Actions CI (`./mvnw verify`) |
+| Packaging | Multi-stage `Dockerfile` for the Java modules (layered jar, non-root user, `--build-arg MODULE=...`); `ticket-mcp-server-python/Dockerfile` and `ticket-mcp-server-rust/Dockerfile` (non-root); `docker-compose.yml` (Ollama, PostgreSQL, request log, assistant, and the ticket server chosen by profile); GitHub Actions CI (Maven, Python, Rust and a contract-test matrix over the three ticket servers) |
 | Embeddings | ONNX model is cached in `EMBEDDING_CACHE_DIR` (`/models` volume in compose), so restarts do not re-download it. The very first start still needs internet |
 | Tests | `./mvnw test`: tool validation, controller tests (auth, validation, error mapping) and a full-context integration test with fake models (KB indexing, retrieval, context reaching the prompt); no LLM needed. `./mvnw verify` also enforces 80% line coverage (JaCoCo, `*Application` classes excluded); report in `<module>/target/site/jacoco` |
 
 Run everything in containers:
 
 ```bash
-HELPDESK_API_KEY=change-me REQUEST_LOG_DB_PASSWORD=change-me-too docker compose up --build
+HELPDESK_API_KEY=change-me REQUEST_LOG_DB_PASSWORD=change-me-too COMPOSE_PROFILES=java docker compose up --build
 curl -s localhost:8080/ask -H 'X-API-Key: change-me' -H 'Content-Type: application/json' -d '{"question":"How do I reset my password?"}'
 ```
+
+`COMPOSE_PROFILES` picks the ticket server: `java`, `python` or `rust`. Exactly one must be active, because the assistant needs a ticket server at startup. Put `COMPOSE_PROFILES=java` in `.env` to make it the default, and override it per run with `COMPOSE_PROFILES=rust docker compose up --build`. Each implementation answers to the network alias `ticket-mcp-server`. To switch a running stack, run `docker compose down` first so the old server stops.
 
 Known limits (deliberate for a demo): in-memory vector store re-indexed on each start, demo tickets in memory, no retention/purge for the request log (questions are kept indefinitely: add a cleanup job if they may contain personal data), no rate limiting or TLS (put a gateway/ingress in front), Docker setup not built or run here.

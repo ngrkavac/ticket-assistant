@@ -1,0 +1,28 @@
+[package]
+name = "ticket-mcp-server-rust"
+version = "1.0.0"
+edition = "2021"
+description = "Ticket MCP server (Rust implementation): getTicket and listOpenTickets over SSE"
+publish = false
+
+[lib]
+name = "ticket_server"
+
+[dependencies]
+axum = "0.8"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+strip = true
