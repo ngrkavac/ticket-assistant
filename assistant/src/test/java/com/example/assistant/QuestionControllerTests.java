@@ -63,8 +63,27 @@ class QuestionControllerTests {
   @Test
   void rejectsBlankOrTooLongQuestion() throws Exception {
     add("{\"text\":\"  \"}", "secret").andExpect(status().isBadRequest());
-    add("{\"text\":\"" + "x".repeat(51) + "\"}", "secret").andExpect(status().isBadRequest());
+    add("{\"text\":\"" + "x".repeat(1001) + "\"}", "secret")
+        .andExpect(status().isBadRequest())
+        .andExpect(
+            jsonPath("$.detail").value("Question exceeds the maximum length of 1000 characters"));
     verify(requestLog, never()).addQuestion(any());
+  }
+
+  @Test
+  void catalogLimitIsSeparateFromTheAskLimit() throws Exception {
+    String text = "x".repeat(1000); // longer than helpdesk.max-question-length=50
+    given(requestLog.addQuestion(text)).willReturn(new RequestLogClient.CatalogQuestion(8, text));
+    add("{\"text\":\"" + text + "\"}", "secret").andExpect(status().isCreated());
+  }
+
+  @Test
+  void requestLogValidationErrorIsA400() throws Exception {
+    given(requestLog.addQuestion("q"))
+        .willThrow(new RequestLogRejectedException("addQuestion rejected: text is invalid"));
+    add("{\"text\":\"q\"}", "secret")
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.detail").value("The request was rejected as invalid."));
   }
 
   @Test

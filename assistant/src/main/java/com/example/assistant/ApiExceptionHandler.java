@@ -47,6 +47,14 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.TOO_MANY_REQUESTS, "The assistant is busy. Please retry shortly."));
   }
 
+  /** The request-log server's message is not passed on; it may describe internal limits. */
+  @ExceptionHandler(RequestLogRejectedException.class)
+  ProblemDetail requestLogRejected(RequestLogRejectedException e) {
+    log.info("Request log rejected a request: {}", e.getMessage());
+    return ProblemDetail.forStatusAndDetail(
+        HttpStatus.BAD_REQUEST, "The request was rejected as invalid.");
+  }
+
   @ExceptionHandler(RequestLogUnavailableException.class)
   ProblemDetail historyUnavailable(RequestLogUnavailableException e) {
     log.warn("Request history unavailable: {}", e.getMessage(), e.getCause());

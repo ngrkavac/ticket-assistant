@@ -13,7 +13,11 @@ public record HelpdeskProperties(
     Kb kb,
     RequestLog requestLog,
     @Min(1) @Max(10000) int maxQuestionLength,
-    @Min(0) @Max(1000) int maxConcurrentRequests) {
+    @Min(0) @Max(1000) int maxConcurrentRequests,
+    @Min(0) @Max(MAX_CATALOG_QUESTION_LENGTH) int maxCatalogQuestionLength) {
+
+  /** The longest catalog question the request-log server stores. */
+  static final int MAX_CATALOG_QUESTION_LENGTH = 1000;
 
   public HelpdeskProperties {
     rag = rag == null ? new Rag(3, 0.3) : rag;
@@ -25,6 +29,8 @@ public record HelpdeskProperties(
     requestLog = requestLog == null ? new RequestLog(true, null) : requestLog;
     maxQuestionLength = maxQuestionLength == 0 ? 1000 : maxQuestionLength;
     maxConcurrentRequests = maxConcurrentRequests == 0 ? 8 : maxConcurrentRequests;
+    maxCatalogQuestionLength =
+        maxCatalogQuestionLength == 0 ? MAX_CATALOG_QUESTION_LENGTH : maxCatalogQuestionLength;
   }
 
   public record Rag(@Min(1) @Max(20) int topK, @Min(0) @Max(1) double similarityThreshold) {}
