@@ -24,7 +24,7 @@ class AssistantServiceTests {
   private final RequestLogClient log = mock(RequestLogClient.class);
 
   private static HelpdeskProperties props(int maxConcurrent) {
-    return new HelpdeskProperties(null, null, null, null, 0, maxConcurrent);
+    return new HelpdeskProperties(null, null, null, null, 0, maxConcurrent, 0);
   }
 
   @Test

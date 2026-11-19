@@ -21,7 +21,7 @@ class RequestLogClientTests {
 
   private static HelpdeskProperties props(boolean enabled) {
     return new HelpdeskProperties(
-        null, null, null, new HelpdeskProperties.RequestLog(enabled, null), 0, 0);
+        null, null, null, new HelpdeskProperties.RequestLog(enabled, null), 0, 0, 0);
   }
 
   private static McpSyncClient client(String connection) {
@@ -240,6 +240,39 @@ class RequestLogClientTests {
     var disabled = new RequestLogClient(provider(List.of()), props(false));
     assertThatThrownBy(() -> disabled.recent(5, null))
         .isInstanceOf(RequestLogUnavailableException.class);
+  }
+
+  @Test
+  void validationErrorsAreRejectionsNotOutages() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any()))
+        .thenReturn(error("text is longer than 1000 characters"))
+        .thenReturn(error("Invalid customer"))
+        .thenReturn(error("could not open JDBC connection"));
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+
+    assertThatThrownBy(() -> log.addQuestion("x"))
+        .isInstanceOf(RequestLogRejectedException.class)
+        .hasMessageContaining("longer than 1000");
+    assertThatThrownBy(() -> log.recent(5, "bad customer"))
+        .isInstanceOf(RequestLogRejectedException.class);
+    assertThatThrownBy(log::questions).isInstanceOf(RequestLogUnavailableException.class);
+  }
+
+  @Test
+  void recognisesValidationMessages() {
+    assertThat(RequestLogClient.isValidationError("text is required")).isTrue();
+    assertThat(RequestLogClient.isValidationError("Invalid requestId")).isTrue();
+    assertThat(RequestLogClient.isValidationError("limit must be between 1 and 100")).isTrue();
+    assertThat(RequestLogClient.isValidationError("Connection refused")).isFalse();
+    assertThat(RequestLogClient.isValidationError(null)).isFalse();
+  }
+
+  private static McpSchema.CallToolResult error(String message) {
+    return McpSchema.CallToolResult.builder()
+        .isError(true)
+        .addContent(new McpSchema.TextContent(message))
+        .build();
   }
 
   private static org.springframework.ai.mcp.McpConnectionInfo info(String connection) {
