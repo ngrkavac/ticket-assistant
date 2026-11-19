@@ -917,3 +917,79 @@ p {
     display: none;
   }
 }
+
+/* Answers to the questions asked in this session */
+.answers {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.answers__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.answers__item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.answers__item + .answers__item {
+  border-top: 1px solid var(--color-border);
+}
+
+.answers__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.answers__question {
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.answers__state {
+  flex-shrink: 0;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.answers__state--asking {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-soft-text);
+}
+
+.answers__state--failed {
+  background: var(--color-error);
+  color: #fff;
+}
+
+.answers__text {
+  margin: 0;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answers__text--error {
+  color: var(--color-error);
+}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ask, listCustomers, listQuestions, listRequests, type CatalogQuestion, type LoggedRequest } from './api';
+import { AnswerList, type AnswerResult } from './components/AnswerList';
 import { CustomerPicker } from './components/CustomerPicker';
 import { Hero } from './components/Hero';
 import { HistoryTable } from './components/HistoryTable';
@@ -27,6 +28,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const [showHistory, setShowHistory] = useState(true);
+  // Answers to the most recent batch, for the customer it was asked about.
+  const [results, setResults] = useState<AnswerResult[]>([]);
+  const [resultsCustomer, setResultsCustomer] = useState<string | null>(null);
   // Ignore history responses for a customer that is no longer selected.
   const customerRef = useRef<string | null>(null);
   customerRef.current = customer;
@@ -87,16 +91,24 @@ export default function App() {
       return;
     }
     const batch = questions.filter((q) => selected.has(q.id));
+    const batchId = Date.now();
+    const update = (i: number, patch: Partial<AnswerResult>) =>
+      setResults((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+    setResults(batch.map((q, i) => ({ key: `${batchId}-${i}`, question: q.text, state: 'pending' })));
+    setResultsCustomer(customer);
     setBusy(true);
     let failed = 0;
     let lastError = '';
     for (const [i, q] of batch.entries()) {
       setMessage({ text: `Asking ${i + 1} of ${batch.length} for ${customer}… this can take a while with a local model.` });
+      update(i, { state: 'asking' });
       try {
-        await ask(q.text, customer);
+        const { answer } = await ask(q.text, customer);
+        update(i, { state: 'answered', answer });
       } catch (e) {
         failed++;
         lastError = (e as Error).message;
+        update(i, { state: 'failed', error: lastError });
       }
       setTimeout(() => void refresh(customer), LOG_WRITE_DELAY_MS);
     }
@@ -139,6 +151,7 @@ export default function App() {
                 onToggle={toggle}
                 onAsk={handleAsk}
               />
+              <AnswerList customer={resultsCustomer} results={results} />
             </section>
             <div className="workspace__divider" aria-hidden="true" />
             <section className="workspace__column" aria-label="New question and history">
