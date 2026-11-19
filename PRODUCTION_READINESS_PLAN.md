@@ -258,7 +258,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 
 ### Stream A: Assistant & security
 - [x] **A1** (T0.1, assistant side) Add the `helpdesk.max-catalog-question-length` property (default 1000) and check it in `QuestionController`. Map request-log error results caused by validation to 400 instead of 503.
-- [ ] **A2** (T0.5, T0.7) Make the queue wait and `Retry-After` configurable. Accept a valid incoming `X-Request-Id`.
+- [x] **A2** (T0.5, T0.7) Make the queue wait and `Retry-After` configurable. Accept a valid incoming `X-Request-Id`.
 - [ ] **A3** (T0.6) Bounded request-log executor and the `helpdesk_requestlog_writes_total{outcome}` metric.
 - [ ] **A4** (T0.4) Caffeine cache for `listCustomers`.
 - [ ] **A5** (T1.1) Spring Security resource server: deny by default, security headers. The API key remains only in the `local` profile.

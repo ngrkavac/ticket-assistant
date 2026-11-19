@@ -21,7 +21,7 @@ class RequestLogClientTests {
 
   private static HelpdeskProperties props(boolean enabled) {
     return new HelpdeskProperties(
-        null, null, null, new HelpdeskProperties.RequestLog(enabled, null), 0, 0, 0);
+        null, null, null, new HelpdeskProperties.RequestLog(enabled, null), 0, 0, 0, null, null);
   }
 
   private static McpSyncClient client(String connection) {

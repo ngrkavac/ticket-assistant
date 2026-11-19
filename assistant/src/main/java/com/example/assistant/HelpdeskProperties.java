@@ -2,6 +2,7 @@ package com.example.assistant;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -14,7 +15,9 @@ public record HelpdeskProperties(
     RequestLog requestLog,
     @Min(1) @Max(10000) int maxQuestionLength,
     @Min(0) @Max(1000) int maxConcurrentRequests,
-    @Min(0) @Max(MAX_CATALOG_QUESTION_LENGTH) int maxCatalogQuestionLength) {
+    @Min(0) @Max(MAX_CATALOG_QUESTION_LENGTH) int maxCatalogQuestionLength,
+    Duration queueWait,
+    Duration retryAfter) {
 
   /** The longest catalog question the request-log server stores. */
   static final int MAX_CATALOG_QUESTION_LENGTH = 1000;
@@ -31,6 +34,23 @@ public record HelpdeskProperties(
     maxConcurrentRequests = maxConcurrentRequests == 0 ? 8 : maxConcurrentRequests;
     maxCatalogQuestionLength =
         maxCatalogQuestionLength == 0 ? MAX_CATALOG_QUESTION_LENGTH : maxCatalogQuestionLength;
+    queueWait = queueWait == null ? Duration.ofSeconds(1) : queueWait;
+    if (queueWait.isNegative()) {
+      throw new IllegalArgumentException("helpdesk.queue-wait must not be negative");
+    }
+    retryAfter = retryAfter == null ? Duration.ofSeconds(5) : retryAfter;
+    if (retryAfter.isNegative() || retryAfter.isZero()) {
+      throw new IllegalArgumentException("helpdesk.retry-after must be positive");
+    }
+  }
+
+  /** The Retry-After header value: whole seconds, rounded up. */
+  long retryAfterSeconds() {
+    return retryAfterSeconds(retryAfter);
+  }
+
+  static long retryAfterSeconds(Duration d) {
+    return d.plusNanos(999_999_999).getSeconds();
   }
 
   public record Rag(@Min(1) @Max(20) int topK, @Min(0) @Max(1) double similarityThreshold) {}

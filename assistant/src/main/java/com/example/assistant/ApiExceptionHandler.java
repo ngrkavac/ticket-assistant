@@ -41,7 +41,9 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(TooManyRequestsException.class)
   ResponseEntity<ProblemDetail> busy(TooManyRequestsException e) {
     return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-        .header(HttpHeaders.RETRY_AFTER, "5")
+        .header(
+            HttpHeaders.RETRY_AFTER,
+            String.valueOf(HelpdeskProperties.retryAfterSeconds(e.retryAfter())))
         .body(
             ProblemDetail.forStatusAndDetail(
                 HttpStatus.TOO_MANY_REQUESTS, "The assistant is busy. Please retry shortly."));

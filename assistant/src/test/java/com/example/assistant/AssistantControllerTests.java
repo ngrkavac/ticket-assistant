@@ -98,6 +98,42 @@ class AssistantControllerTests {
   }
 
   @Test
+  void retryAfterComesFromTheRejection() throws Exception {
+    given(service.ask(anyString(), any()))
+        .willThrow(new TooManyRequestsException(java.time.Duration.ofMillis(1500)));
+    ask("{\"question\":\"hi\"}", "secret")
+        .andExpect(status().isTooManyRequests())
+        .andExpect(header().string("Retry-After", "2"));
+  }
+
+  @Test
+  void keepsAValidIncomingRequestId() throws Exception {
+    given(service.ask("hi", null)).willReturn("hello");
+    mvc.perform(
+            post("/ask")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"hi\"}")
+                .header("X-API-Key", "secret")
+                .header("X-Request-Id", "ingress-1.2:abc_X-9"))
+        .andExpect(status().isOk())
+        .andExpect(header().string("X-Request-Id", "ingress-1.2:abc_X-9"));
+  }
+
+  @Test
+  void replacesAnInvalidIncomingRequestId() throws Exception {
+    given(service.ask("hi", null)).willReturn("hello");
+    mvc.perform(
+            post("/ask")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"hi\"}")
+                .header("X-API-Key", "secret")
+                .header("X-Request-Id", "bad id\nwith newline"))
+        .andExpect(status().isOk())
+        .andExpect(
+            header().string("X-Request-Id", org.hamcrest.Matchers.matchesPattern("[0-9a-f-]{36}")));
+  }
+
+  @Test
   void bugIs500WithoutLeakingDetails() throws Exception {
     given(service.ask(anyString(), any())).willThrow(new IllegalStateException("secret internals"));
     ask("{\"question\":\"hi\"}", "secret")

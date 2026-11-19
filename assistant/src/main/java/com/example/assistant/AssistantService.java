@@ -1,5 +1,6 @@
 package com.example.assistant;
 
+import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -8,13 +9,12 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 
 /**
- * Calls the LLM, with a cap on concurrent in-flight requests so slow model calls cannot pile up.
- * Every request that reaches the model is stored via {@link RequestLogClient}.
+ * Calls the LLM, with a cap on concurrent in-flight requests so slow model calls cannot pile up. A
+ * request waits up to helpdesk.queue-wait for a permit before it is rejected with 429. Every
+ * request that reaches the model is stored via {@link RequestLogClient}.
  */
 @Service
 class AssistantService {
-
-  private static final long QUEUE_WAIT_MS = 1000;
 
   private final ChatClient chat;
 
@@ -22,10 +22,16 @@ class AssistantService {
 
   private final RequestLogClient requestLog;
 
+  private final Duration queueWait;
+
+  private final Duration retryAfter;
+
   AssistantService(ChatClient chat, HelpdeskProperties props, RequestLogClient requestLog) {
     this.chat = chat;
     this.requestLog = requestLog;
     this.permits = new Semaphore(props.maxConcurrentRequests());
+    this.queueWait = props.queueWait();
+    this.retryAfter = props.retryAfter();
   }
 
   /**
@@ -34,12 +40,12 @@ class AssistantService {
    */
   public String ask(String question, String customer) {
     try {
-      if (!permits.tryAcquire(QUEUE_WAIT_MS, TimeUnit.MILLISECONDS)) {
-        throw new TooManyRequestsException();
+      if (!permits.tryAcquire(queueWait.toNanos(), TimeUnit.NANOSECONDS)) {
+        throw new TooManyRequestsException(retryAfter);
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw new TooManyRequestsException();
+      throw new TooManyRequestsException(retryAfter);
     }
     String requestId = currentRequestId();
     long start = System.nanoTime();
