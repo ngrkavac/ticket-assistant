@@ -24,7 +24,7 @@ class AssistantServiceTests {
   private final RequestLogClient log = mock(RequestLogClient.class);
 
   private static HelpdeskProperties props(int maxConcurrent) {
-    return new HelpdeskProperties(null, null, null, null, 0, maxConcurrent);
+    return new HelpdeskProperties(null, null, null, null, 0, maxConcurrent, 0, null, null);
   }
 
   @Test
@@ -135,5 +135,45 @@ class AssistantServiceTests {
       Thread.interrupted();
     }
     verify(log, never()).record(any(), any(), any(), any(), any(), anyLong());
+  }
+
+  @Test
+  void usesConfiguredQueueWaitAndRetryAfter() throws Exception {
+    CountDownLatch started = new CountDownLatch(1);
+    CountDownLatch finish = new CountDownLatch(1);
+    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+    when(chat.prompt().user("slow").call().content())
+        .thenAnswer(
+            inv -> {
+              started.countDown();
+              finish.await();
+              return "done";
+            });
+    var props =
+        new HelpdeskProperties(
+            null,
+            null,
+            null,
+            null,
+            0,
+            1,
+            0,
+            java.time.Duration.ZERO,
+            java.time.Duration.ofSeconds(30));
+    AssistantService service = new AssistantService(chat, props, log);
+    Thread t = new Thread(() -> service.ask("slow", null)); // takes the only slot
+    t.start();
+    started.await();
+
+    long start = System.nanoTime();
+    assertThatThrownBy(() -> service.ask("x", null))
+        .isInstanceOfSatisfying(
+            TooManyRequestsException.class,
+            e -> assertThat(e.retryAfter()).isEqualTo(java.time.Duration.ofSeconds(30)));
+    // a zero queue wait rejects at once instead of waiting the old fixed second
+    assertThat(System.nanoTime() - start).isLessThan(500_000_000L);
+
+    finish.countDown();
+    t.join();
   }
 }

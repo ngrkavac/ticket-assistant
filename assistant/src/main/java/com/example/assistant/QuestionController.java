@@ -13,7 +13,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * The questions offered in the UI, stored by the request-log server. Anyone with the API key can
- * add one; adding the same text twice returns the existing question.
+ * add one; adding the same text twice returns the existing question. Catalog questions are limited
+ * to helpdesk.max-catalog-question-length characters (the request-log server's own limit), which is
+ * separate from the /ask limit.
  */
 @RestController
 class QuestionController {
@@ -38,8 +40,8 @@ class QuestionController {
   @ResponseStatus(HttpStatus.CREATED)
   RequestLogClient.CatalogQuestion add(@Valid @RequestBody NewQuestion q) {
     String text = q.text().trim();
-    if (text.length() > props.maxQuestionLength()) {
-      throw new QuestionTooLongException(props.maxQuestionLength());
+    if (text.length() > props.maxCatalogQuestionLength()) {
+      throw new QuestionTooLongException(props.maxCatalogQuestionLength());
     }
     return requestLog.addQuestion(text);
   }

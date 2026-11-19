@@ -221,7 +221,7 @@ Existing pieces to reuse: `McpToolFilter` pattern in `ChatConfig.hideRequestLogT
 
 ## Work breakdown: 3 parallel streams
 
-The phase lists above are the **specification**. Progress is tracked **only here**: tick a stream task when it is done, and leave the T-ID checkboxes above unticked.
+The phase lists above are the **specification**. Progress is tracked **only here**: stream tasks are ticked by the main session after their PRs are merged (agents never edit this file; they record progress in `handoff/stream-<x>.md`). The T-ID checkboxes above stay unticked.
 
 The work is split **by file ownership**, so the three agents rarely edit the same file. Where streams depend on each other, the interface is fixed up front in [Shared contracts](#shared-contracts). Each side can build against the contract with stubs or fakes without waiting for the other.
 
@@ -236,9 +236,9 @@ Launch prompt for each agent (each runs in its own git worktree):
 |---|---|
 | **A: Assistant & security** | `assistant/**`, `eval/**`, `deploy/observability/**`, `handoff/stream-a.md` |
 | **B: MCP servers & data** | `ticket-mcp-server-java/**`, `ticket-mcp-server-python/**`, `ticket-mcp-server-rust/**`, `request-log-mcp-server/**`, `ticket-mcp-contract-tests/**`, `.mcp.json`, `.claude/settings.json`, `perf/**`, the `contract` job in `.github/workflows/ci.yml`, `handoff/stream-b.md` |
-| **C: Platform & UI** | `ui/**`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `.github/**` (except the `contract` job), `deploy/**` (except `deploy/observability/`), root `pom.xml`, `renovate.json`, `README.md`, `HOW_IT_WORKS.md`, `docs/**`, `CLAUDE.md`, `handoff/stream-c.md` |
+| **C: Platform & UI** | `ui/**`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `.github/**` (except the `contract` job), `deploy/**` (except `deploy/observability/`), root `pom.xml`, `renovate.json`, `README.md`, `HOW_IT_WORKS.md`, `docs/**`, `CLAUDE.md`, `.gitignore`, `handoff/stream-c.md` |
 
-Shared file: `PRODUCTION_READINESS_PLAN.md`. Each stream may only tick its own checkboxes. Agents commit locally only; the user pushes and opens every PR (D3, `CLAUDE.md`).
+`PRODUCTION_READINESS_PLAN.md` is owned by no stream: agents never edit it, and the main session ticks checkboxes after merges. Agents commit locally only; the user pushes and opens every PR (D3, `CLAUDE.md`).
 
 ### Shared contracts
 
@@ -257,8 +257,8 @@ Shared file: `PRODUCTION_READINESS_PLAN.md`. Each stream may only tick its own c
 Legend: ⛓ = depends on another stream's task being merged. **[L]** = large task (counts as 2 toward the session limit).
 
 ### Stream A: Assistant & security
-- [ ] **A1** (T0.1, assistant side) Add the `helpdesk.max-catalog-question-length` property (default 1000) and check it in `QuestionController`. Map request-log error results caused by validation to 400 instead of 503.
-- [ ] **A2** (T0.5, T0.7) Make the queue wait and `Retry-After` configurable. Accept a valid incoming `X-Request-Id`.
+- [x] **A1** (T0.1, assistant side) Add the `helpdesk.max-catalog-question-length` property (default 1000) and check it in `QuestionController`. Map request-log error results caused by validation to 400 instead of 503.
+- [x] **A2** (T0.5, T0.7) Make the queue wait and `Retry-After` configurable. Accept a valid incoming `X-Request-Id`.
 - [ ] **A3** (T0.6) Bounded request-log executor and the `helpdesk_requestlog_writes_total{outcome}` metric.
 - [ ] **A4** (T0.4) Caffeine cache for `listCustomers`.
 - [ ] **A5** (T1.1) Spring Security resource server: deny by default, security headers. The API key remains only in the `local` profile.
@@ -279,7 +279,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [ ] **A20** (T6.6) LLM eval set `eval/questions.yaml`, a runner script and `eval/README.md`. The nightly workflow is added by C13.
 
 ### Stream B: MCP servers & data
-- [ ] **B1** (T2.2) Remove the H2 default from the request-log server; add `local` and `prod` profiles.
+- [x] **B1** (T2.2) Remove the H2 default from the request-log server; add `local` and `prod` profiles.
 - [x] **B2** (T2.5) Testcontainers Postgres tests for the request-log repositories.
 - [ ] **B3** (T1.5, T1.6, server side) Migration `V3__user_subject_and_tool_calls.sql`, plus the `logRequest`/`getRequest` changes and tests per K4.
 - [ ] **B4** (T2.3) Separate Flyway (DDL) and app (DML) database users for the request log.
@@ -294,8 +294,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [ ] **B13** (T6.4) k6 load-test script `perf/ask.js` and a results template. It runs against staging after C11c.
 
 ### Stream C: Platform & UI
-- [ ] **C1** (T0.2) Fix the jar glob in the `Dockerfile` so release versions build.
-- [ ] **C2** (T0.3) Show answers in the UI (per-question result list).
+- [x] **C1** (T0.2) Fix the jar glob in the `Dockerfile` so release versions build.
+- [x] **C2** (T0.3) Show answers in the UI (per-question result list).
 - [ ] **C3** (T6.1) ESLint, Vitest and Testing Library; tests for the answer display and error states; a `ui` CI job.
 - [ ] **C4** (T6.3) CI hardening: `permissions: contents: read`, actions pinned by SHA, `renovate.json`.
 - [ ] **C5** (T4.6, T6.7 prep) `build-info` and git-commit-id in the root `pom.xml`; `${revision}` versioning.

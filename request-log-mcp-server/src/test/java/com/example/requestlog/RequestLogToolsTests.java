@@ -10,9 +10,11 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 
-/** Full context on in-memory H2 with the Flyway schema. */
+/** Full context on in-memory H2 (the {@code local} profile) with the Flyway schema. */
 @SpringBootTest
+@ActiveProfiles("local")
 class RequestLogToolsTests {
 
   @Autowired RequestLogTools tools;

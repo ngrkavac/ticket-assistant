@@ -36,7 +36,7 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
-		<!-- In-memory default for local runs and tests -->
+		<!-- In-memory database for the "local" profile and tests only (never a silent default) -->
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>

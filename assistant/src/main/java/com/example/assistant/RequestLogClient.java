@@ -7,6 +7,7 @@ import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,6 +33,10 @@ class RequestLogClient implements DisposableBean {
   static final String LIST_QUESTIONS_TOOL = "listQuestions";
 
   static final String ADD_QUESTION_TOOL = "addQuestion";
+
+  /** Phrases in the request-log server's IllegalArgumentException messages (lower case). */
+  private static final List<String> VALIDATION_MARKERS =
+      List.of("invalid", "is required", "is longer than", "must be");
 
   private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -162,6 +167,7 @@ class RequestLogClient implements DisposableBean {
   /**
    * Adds a question to the UI list; returns the existing one if the text is already there.
    *
+   * @throws RequestLogRejectedException if the server rejects the text as invalid
    * @throws RequestLogUnavailableException if logging is disabled or the server fails
    */
   CatalogQuestion addQuestion(String text) {
@@ -179,7 +185,7 @@ class RequestLogClient implements DisposableBean {
     } catch (RuntimeException e) {
       throw new RequestLogUnavailableException(tool + " failed", e);
     }
-    if (Boolean.TRUE.equals(result.isError()) || result.content() == null) {
+    if (result.content() == null) {
       throw new RequestLogUnavailableException(tool + " returned an error", null);
     }
     String text =
@@ -187,13 +193,35 @@ class RequestLogClient implements DisposableBean {
             .filter(McpSchema.TextContent.class::isInstance)
             .map(c -> ((McpSchema.TextContent) c).text())
             .findFirst()
-            .orElseThrow(
-                () -> new RequestLogUnavailableException(tool + " returned no text", null));
+            .orElse(null);
+    if (Boolean.TRUE.equals(result.isError())) {
+      if (isValidationError(text)) {
+        throw new RequestLogRejectedException(tool + " rejected the request: " + text);
+      }
+      throw new RequestLogUnavailableException(tool + " returned an error", null);
+    }
+    if (text == null) {
+      throw new RequestLogUnavailableException(tool + " returned no text", null);
+    }
     try {
       return JSON.readValue(text, type);
     } catch (Exception e) {
       throw new RequestLogUnavailableException(tool + " returned unexpected content", e);
     }
+  }
+
+  /**
+   * The request-log server reports invalid arguments as an error result whose text is the
+   * IllegalArgumentException message, e.g. "Invalid customer", "text is required" or "text is
+   * longer than 1000 characters". Anything else (server or database failure) is not a validation
+   * error.
+   */
+  static boolean isValidationError(String errorText) {
+    if (errorText == null) {
+      return false;
+    }
+    String t = errorText.toLowerCase(Locale.ROOT);
+    return VALIDATION_MARKERS.stream().anyMatch(t::contains);
   }
 
   /** Lets pending writes finish on shutdown. */
