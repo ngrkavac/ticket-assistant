@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ask, listCustomers, listQuestions, listRequests, type CatalogQuestion, type LoggedRequest } from './api';
 import { CustomerPicker } from './components/CustomerPicker';
+import { Hero } from './components/Hero';
 import { HistoryTable } from './components/HistoryTable';
 import { NewQuestionForm } from './components/NewQuestionForm';
 import { QuestionPicker } from './components/QuestionPicker';
+import { SiteFooter } from './components/SiteFooter';
+import { SiteHeader } from './components/SiteHeader';
 import { Switch } from './components/Switch';
 
 // The assistant stores each request in the background, so give it a moment before re-reading.
@@ -108,40 +111,47 @@ export default function App() {
   }
 
   return (
-    <main className="page">
-      <header className="page__heading">
-        <h1>Question history</h1>
-        <p>Choose a customer, pick one or more questions and ask the helpdesk assistant.</p>
-      </header>
-      <div className="workspace">
-        <section className="workspace__column" aria-label="Ask questions">
-          <CustomerPicker
-            customers={customers}
-            value={customer}
-            error={customerError}
-            disabled={busy}
-            onChange={setCustomer}
-          />
-          <QuestionPicker
-            questions={questions}
-            error={questionsError}
-            selected={selected}
-            busy={busy}
-            canAsk={customer !== null}
-            message={message}
-            onToggle={toggle}
-            onAsk={handleAsk}
-          />
+    <div className="site" id="top">
+      <SiteHeader />
+      <main className="page">
+        <Hero />
+        <section id="workspace" className="workspace-section" aria-labelledby="workspace-title">
+          <header className="page__heading">
+            <h2 id="workspace-title">Workspace</h2>
+            <p>Choose a customer, pick one or more questions and ask the helpdesk assistant.</p>
+          </header>
+          <div className="workspace">
+            <section className="workspace__column" aria-label="Ask questions">
+              <CustomerPicker
+                customers={customers}
+                value={customer}
+                error={customerError}
+                disabled={busy}
+                onChange={setCustomer}
+              />
+              <QuestionPicker
+                questions={questions}
+                error={questionsError}
+                selected={selected}
+                busy={busy}
+                canAsk={customer !== null}
+                message={message}
+                onToggle={toggle}
+                onAsk={handleAsk}
+              />
+            </section>
+            <div className="workspace__divider" aria-hidden="true" />
+            <section className="workspace__column" aria-label="New question and history">
+              <NewQuestionForm disabled={busy} onAdded={handleAdded} />
+              <Switch id="show-history" label="Show history" checked={showHistory} onChange={setShowHistory} />
+              {showHistory && (
+                <HistoryTable customer={customer} limit={HISTORY_SIZE} entries={entries} error={historyError} />
+              )}
+            </section>
+          </div>
         </section>
-        <div className="workspace__divider" aria-hidden="true" />
-        <section className="workspace__column" aria-label="New question and history">
-          <NewQuestionForm disabled={busy} onAdded={handleAdded} />
-          <Switch id="show-history" label="Show history" checked={showHistory} onChange={setShowHistory} />
-          {showHistory && (
-            <HistoryTable customer={customer} limit={HISTORY_SIZE} entries={entries} error={historyError} />
-          )}
-        </section>
-      </div>
-    </main>
+      </main>
+      <SiteFooter />
+    </div>
   );
 }
