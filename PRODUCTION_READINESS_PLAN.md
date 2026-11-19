@@ -294,7 +294,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [ ] **B13** (T6.4) k6 load-test script `perf/ask.js` and a results template. It runs against staging after C11c.
 
 ### Stream C: Platform & UI
-- [ ] **C1** (T0.2) Fix the jar glob in the `Dockerfile` so release versions build.
+- [x] **C1** (T0.2) Fix the jar glob in the `Dockerfile` so release versions build.
 - [ ] **C2** (T0.3) Show answers in the UI (per-question result list).
 - [ ] **C3** (T6.1) ESLint, Vitest and Testing Library; tests for the answer display and error states; a `ui` CI job.
 - [ ] **C4** (T6.3) CI hardening: `permissions: contents: read`, actions pinned by SHA, `renovate.json`.
