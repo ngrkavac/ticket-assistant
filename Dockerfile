@@ -9,8 +9,14 @@ COPY assistant/pom.xml assistant/
 RUN ./mvnw -q -B dependency:go-offline
 COPY . .
 ARG MODULE
+# Pick the single executable jar for any version (SNAPSHOT or release), skipping
+# plain/sources/javadoc jars. Fail loudly if there is not exactly one candidate.
 RUN ./mvnw -q -B -DskipTests -pl ${MODULE} -am package \
- && java -Djarmode=tools -jar ${MODULE}/target/${MODULE}-*-SNAPSHOT.jar extract --layers --destination /out
+ && jars=$(find ${MODULE}/target -maxdepth 1 -name "${MODULE}-*.jar" \
+      ! -name '*-plain.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar') \
+ && count=$(printf '%s\n' "$jars" | grep -c . || true) \
+ && if [ "$count" -ne 1 ]; then echo "Expected exactly one jar in ${MODULE}/target, found $count: $jars" >&2; exit 1; fi \
+ && java -Djarmode=tools -jar "$jars" extract --layers --destination /out
 
 FROM eclipse-temurin:21-jre
 RUN useradd --system --uid 10001 app && mkdir /models && chown 10001 /models
