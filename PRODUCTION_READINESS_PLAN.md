@@ -236,7 +236,7 @@ Launch prompt for each agent (each runs in its own git worktree):
 |---|---|
 | **A: Assistant & security** | `assistant/**`, `eval/**`, `deploy/observability/**`, `handoff/stream-a.md` |
 | **B: MCP servers & data** | `ticket-mcp-server-java/**`, `ticket-mcp-server-python/**`, `ticket-mcp-server-rust/**`, `request-log-mcp-server/**`, `ticket-mcp-contract-tests/**`, `.mcp.json`, `.claude/settings.json`, `perf/**`, the `contract` job in `.github/workflows/ci.yml`, `handoff/stream-b.md` |
-| **C: Platform & UI** | `ui/**`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `.github/**` (except the `contract` job), `deploy/**` (except `deploy/observability/`), root `pom.xml`, `renovate.json`, `README.md`, `HOW_IT_WORKS.md`, `docs/**`, `CLAUDE.md`, `.gitignore`, `handoff/stream-c.md` |
+| **C: Platform & UI** | `ui/**`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `.github/**` (except the `contract` job), `deploy/**` (except `deploy/observability/`), root `pom.xml`, `.mvn/**`, `mvnw`, `renovate.json`, `README.md`, `HOW_IT_WORKS.md`, `docs/**`, `CLAUDE.md`, `.gitignore`, `handoff/stream-c.md` |
 
 `PRODUCTION_READINESS_PLAN.md` is owned by no stream: agents never edit it, and the main session ticks checkboxes after merges. Agents commit locally only; the user pushes and opens every PR (D3, `CLAUDE.md`).
 
@@ -297,7 +297,11 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **C1** (T0.2) Fix the jar glob in the `Dockerfile` so release versions build.
 - [x] **C2** (T0.3) Show answers in the UI (per-question result list).
 - [ ] **C3** (T6.1) ESLint, Vitest and Testing Library; tests for the answer display and error states; a `ui` CI job.
-- [ ] **C4** (T6.3) CI hardening: `permissions: contents: read`, actions pinned by SHA, `renovate.json`.
+- [ ] **C4** (T6.3) CI hardening:
+  - `permissions: contents: read`, actions pinned by SHA, `renovate.json`.
+  - Run CI once per commit: `on: {push: {branches: [main]}, pull_request: {}}`. Every push to a PR branch currently runs CI twice, which doubles the downloads from Maven Central.
+  - Make Maven downloads in the `Dockerfile` resilient: a BuildKit cache mount (`RUN --mount=type=cache,target=/root/.m2 ...`) on the `dependency:go-offline` and `package` steps, and Maven HTTP retries (`-Dmaven.resolver.transport=wagon -Dmaven.wagon.http.retryHandler.count=5`, or the equivalent resolver setting in `.mvn/maven.config`). This fixes the flaky `contract (java)` image build seen in CI run 44553395898, where Central briefly failed to serve existing artifacts.
+  - Move off the deprecated Node 20 action majors (`actions/checkout@v4`, `actions/setup-java@v4`, `astral-sh/setup-uv@v6`, …) to their current majors while pinning by SHA.
 - [ ] **C5** (T4.6, T6.7 prep) `build-info` and git-commit-id in the root `pom.xml`; `${revision}` versioning.
 - [ ] **C6** (T1.10) Keycloak in compose, with `deploy/keycloak/realm-helpdesk.json` per K1 (users `acme-agent`, `globex-agent`, `acme-writer`, `admin`).
 - [ ] **C7** **[L]** (T1.7) oauth2-proxy in compose, nginx forwarding `Authorization` per K2, UI redirect to sign-in on 401, user menu and logout, API-key wording removed. ⛓ the end-to-end check needs A5–A7; the UI part can be built against K2/K3 first.
