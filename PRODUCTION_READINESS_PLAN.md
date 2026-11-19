@@ -221,7 +221,7 @@ Existing pieces to reuse: `McpToolFilter` pattern in `ChatConfig.hideRequestLogT
 
 ## Work breakdown: 3 parallel streams
 
-The phase lists above are the **specification**. Progress is tracked **only here**: tick a stream task when it is done, and leave the T-ID checkboxes above unticked.
+The phase lists above are the **specification**. Progress is tracked **only here**: stream tasks are ticked by the main session after their PRs are merged (agents never edit this file; they record progress in `handoff/stream-<x>.md`). The T-ID checkboxes above stay unticked.
 
 The work is split **by file ownership**, so the three agents rarely edit the same file. Where streams depend on each other, the interface is fixed up front in [Shared contracts](#shared-contracts). Each side can build against the contract with stubs or fakes without waiting for the other.
 
@@ -236,9 +236,9 @@ Launch prompt for each agent (each runs in its own git worktree):
 |---|---|
 | **A: Assistant & security** | `assistant/**`, `eval/**`, `deploy/observability/**`, `handoff/stream-a.md` |
 | **B: MCP servers & data** | `ticket-mcp-server-java/**`, `ticket-mcp-server-python/**`, `ticket-mcp-server-rust/**`, `request-log-mcp-server/**`, `ticket-mcp-contract-tests/**`, `.mcp.json`, `.claude/settings.json`, `perf/**`, the `contract` job in `.github/workflows/ci.yml`, `handoff/stream-b.md` |
-| **C: Platform & UI** | `ui/**`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `.github/**` (except the `contract` job), `deploy/**` (except `deploy/observability/`), root `pom.xml`, `renovate.json`, `README.md`, `HOW_IT_WORKS.md`, `docs/**`, `CLAUDE.md`, `handoff/stream-c.md` |
+| **C: Platform & UI** | `ui/**`, `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `.github/**` (except the `contract` job), `deploy/**` (except `deploy/observability/`), root `pom.xml`, `renovate.json`, `README.md`, `HOW_IT_WORKS.md`, `docs/**`, `CLAUDE.md`, `.gitignore`, `handoff/stream-c.md` |
 
-Shared file: `PRODUCTION_READINESS_PLAN.md`. Each stream may only tick its own checkboxes. Agents commit locally only; the user pushes and opens every PR (D3, `CLAUDE.md`).
+`PRODUCTION_READINESS_PLAN.md` is owned by no stream: agents never edit it, and the main session ticks checkboxes after merges. Agents commit locally only; the user pushes and opens every PR (D3, `CLAUDE.md`).
 
 ### Shared contracts
 

@@ -29,7 +29,7 @@ Plans live in the repo root as `<FEATURE>_PLAN.md`.
 - The source of truth is `PRODUCTION_READINESS_PLAN.md`, section **"Work breakdown: 3 parallel streams"**. Each agent works on exactly one stream (A, B or C), named in its launch prompt. If no stream was named, ask before doing anything.
 - Work only in your stream's git worktree. Use **one local branch per task**, named `prod/<task-id>-<slug>` (e.g. `prod/a1-catalog-length`), created from the latest `main`. Only if the task needs your own unmerged earlier task, branch from that task's branch and say so in the PR text. Each branch becomes one PR, which the user pushes and opens (see "Git" above).
 - **Never edit files owned by another stream.** The ownership table is in the plan. If you need a change in another stream's file, write it under "Needs from stream X" in the PR text.
-- Two exceptions: you may tick your own task's checkbox in `PRODUCTION_READINESS_PLAN.md`, and you may overwrite your own `handoff/stream-<x>.md`.
+- Never edit `PRODUCTION_READINESS_PLAN.md`, not even its checkboxes. Neighbouring checkbox edits made on separate branches always conflict. Record progress only in your own `handoff/stream-<x>.md`. The main session ticks the plan's checkboxes in one commit after the user merges a batch of PRs.
 - Shared contracts K1–K9 in the plan may only change in a backwards-compatible way (new params optional, nothing removed). A breaking change needs a note in the plan and the user's approval.
 - Never deploy anything.
 
@@ -37,7 +37,7 @@ Plans live in the repo root as `<FEATURE>_PLAN.md`.
 
 Long sessions degrade. Work is split into short sessions that hand off through a file, so each session starts with fresh context.
 
-1. **Start of session:** read `handoff/stream-<x>.md` and your stream's task list in the plan. Pick the first unchecked task whose ⛓ cross-stream dependencies are merged. If an earlier session left work in progress, continue that first.
+1. **Start of session:** read `handoff/stream-<x>.md` and your stream's task list in the plan. A task is finished if it is ticked in the plan **or** listed as done in your handoff (the plan is ticked only after merge). Pick the first unfinished task whose ⛓ cross-stream dependencies are merged into `main`. If the previous task's branch is not merged yet and the new task touches the same files, branch from it and say so in the PR text. If an earlier session left work in progress, continue that first.
 2. **Limit:** finish **at most 2 tasks per session**. A task marked **[L]** (large) counts as 2, so a session that takes one does nothing else.
 3. **Stop early** at the next safe point (tests green, work committed) in any of these cases:
    - the conversation was automatically compacted or summarized (you see a summary of earlier context);
@@ -46,7 +46,7 @@ Long sessions degrade. Work is split into short sessions that hand off through a
 4. A task is **done** only when:
    - the code and tests are written;
    - the relevant build/test commands above pass;
-   - its checkbox is ticked in the plan;
+   - it is listed under "Done this session" in your handoff file;
    - everything is committed on the task branch;
    - its PR title and body are written under "Ready to push" in the handoff file.
 5. **Never start another task once the limit is reached**, even a small one.
