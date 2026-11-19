@@ -280,7 +280,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 
 ### Stream B: MCP servers & data
 - [ ] **B1** (T2.2) Remove the H2 default from the request-log server; add `local` and `prod` profiles.
-- [ ] **B2** (T2.5) Testcontainers Postgres tests for the request-log repositories.
+- [x] **B2** (T2.5) Testcontainers Postgres tests for the request-log repositories.
 - [ ] **B3** (T1.5, T1.6, server side) Migration `V3__user_subject_and_tool_calls.sql`, plus the `logRequest`/`getRequest` changes and tests per K4.
 - [ ] **B4** (T2.3) Separate Flyway (DDL) and app (DML) database users for the request log.
 - [ ] **B5** (T2.4) Retention purge job with ShedLock and the `requestlog_purged_rows_total` metric.

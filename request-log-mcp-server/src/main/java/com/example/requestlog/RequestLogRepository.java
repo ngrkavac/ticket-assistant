@@ -5,7 +5,6 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Optional;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,7 +23,9 @@ class RequestLogRepository {
 
   /**
    * Inserts the entry. Idempotent per request id: a retried call returns the row that is already
-   * stored instead of failing.
+   * stored instead of failing. Uses {@code ON CONFLICT DO NOTHING} rather than catching a
+   * duplicate-key error, because on PostgreSQL a failed statement aborts the whole transaction (no
+   * conflict target, so the same SQL also runs on H2 in the local profile).
    */
   @Transactional
   RequestLogEntry save(
@@ -35,25 +36,22 @@ class RequestLogRepository {
       String errorType,
       long durationMs,
       String customer) {
-    try {
-      jdbc.sql(
-              """
-              INSERT INTO request_log
-                (request_id, question, answer, status, error_type, duration_ms, customer)
-              VALUES
-                (:requestId, :question, :answer, :status, :errorType, :durationMs, :customer)
-              """)
-          .param("requestId", requestId)
-          .param("question", question)
-          .param("answer", answer)
-          .param("status", status)
-          .param("errorType", errorType)
-          .param("durationMs", durationMs)
-          .param("customer", customer)
-          .update();
-    } catch (DuplicateKeyException e) {
-      // already stored by an earlier attempt
-    }
+    jdbc.sql(
+            """
+            INSERT INTO request_log
+              (request_id, question, answer, status, error_type, duration_ms, customer)
+            VALUES
+              (:requestId, :question, :answer, :status, :errorType, :durationMs, :customer)
+            ON CONFLICT DO NOTHING
+            """)
+        .param("requestId", requestId)
+        .param("question", question)
+        .param("answer", answer)
+        .param("status", status)
+        .param("errorType", errorType)
+        .param("durationMs", durationMs)
+        .param("customer", customer)
+        .update();
     return findByRequestId(requestId).orElseThrow();
   }
 
