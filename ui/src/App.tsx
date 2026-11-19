@@ -4,6 +4,7 @@ import { CustomerPicker } from './components/CustomerPicker';
 import { HistoryTable } from './components/HistoryTable';
 import { NewQuestionForm } from './components/NewQuestionForm';
 import { QuestionPicker } from './components/QuestionPicker';
+import { Switch } from './components/Switch';
 
 // The assistant stores each request in the background, so give it a moment before re-reading.
 const LOG_WRITE_DELAY_MS = 500;
@@ -22,6 +23,7 @@ export default function App() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
+  const [showHistory, setShowHistory] = useState(true);
   // Ignore history responses for a customer that is no longer selected.
   const customerRef = useRef<string | null>(null);
   customerRef.current = customer;
@@ -134,7 +136,10 @@ export default function App() {
         <div className="workspace__divider" aria-hidden="true" />
         <section className="workspace__column" aria-label="New question and history">
           <NewQuestionForm disabled={busy} onAdded={handleAdded} />
-          <HistoryTable customer={customer} limit={HISTORY_SIZE} entries={entries} error={historyError} />
+          <Switch id="show-history" label="Show history" checked={showHistory} onChange={setShowHistory} />
+          {showHistory && (
+            <HistoryTable customer={customer} limit={HISTORY_SIZE} entries={entries} error={historyError} />
+          )}
         </section>
       </div>
     </main>
