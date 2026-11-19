@@ -14,7 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 class RequestLogRepository {
 
   private static final String COLUMNS =
-      "id, request_id, question, answer, status, error_type, duration_ms, created_at";
+      "id, request_id, question, answer, status, error_type, duration_ms, customer, created_at";
 
   private final JdbcClient jdbc;
 
@@ -33,12 +33,15 @@ class RequestLogRepository {
       String answer,
       String status,
       String errorType,
-      long durationMs) {
+      long durationMs,
+      String customer) {
     try {
       jdbc.sql(
               """
-              INSERT INTO request_log (request_id, question, answer, status, error_type, duration_ms)
-              VALUES (:requestId, :question, :answer, :status, :errorType, :durationMs)
+              INSERT INTO request_log
+                (request_id, question, answer, status, error_type, duration_ms, customer)
+              VALUES
+                (:requestId, :question, :answer, :status, :errorType, :durationMs, :customer)
               """)
           .param("requestId", requestId)
           .param("question", question)
@@ -46,6 +49,7 @@ class RequestLogRepository {
           .param("status", status)
           .param("errorType", errorType)
           .param("durationMs", durationMs)
+          .param("customer", customer)
           .update();
     } catch (DuplicateKeyException e) {
       // already stored by an earlier attempt
@@ -60,14 +64,21 @@ class RequestLogRepository {
         .optional();
   }
 
-  List<RequestLogEntry> findRecent(int limit) {
-    return jdbc.sql(
-            "SELECT "
-                + COLUMNS
-                + " FROM request_log ORDER BY created_at DESC, id DESC LIMIT :limit")
-        .param("limit", limit)
-        .query(RequestLogRepository::map)
-        .list();
+  /** Newest first; only the given customer's requests when customer is not null. */
+  List<RequestLogEntry> findRecent(int limit, String customer) {
+    String where = customer == null ? "" : " WHERE customer = :customer";
+    var sql =
+        jdbc.sql(
+                "SELECT "
+                    + COLUMNS
+                    + " FROM request_log"
+                    + where
+                    + " ORDER BY created_at DESC, id DESC LIMIT :limit")
+            .param("limit", limit);
+    if (customer != null) {
+      sql = sql.param("customer", customer);
+    }
+    return sql.query(RequestLogRepository::map).list();
   }
 
   private static RequestLogEntry map(ResultSet rs, int row) throws SQLException {
@@ -80,6 +91,7 @@ class RequestLogRepository {
         rs.getString("status"),
         rs.getString("error_type"),
         rs.getLong("duration_ms"),
+        rs.getString("customer"),
         created.toInstant());
   }
 }

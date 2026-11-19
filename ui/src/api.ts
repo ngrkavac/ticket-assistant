@@ -2,7 +2,13 @@ export type LoggedRequest = {
   requestId: string;
   question: string;
   status: 'SUCCESS' | 'ERROR';
+  customer: string | null;
   createdAt: string;
+};
+
+export type CatalogQuestion = {
+  id: number;
+  text: string;
 };
 
 export class ApiError extends Error {
@@ -28,14 +34,30 @@ async function send<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function ask(question: string): Promise<{ answer: string }> {
-  return send('/ask', {
+function postJson<T>(url: string, body: unknown): Promise<T> {
+  return send(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   });
 }
 
-export function listRequests(limit = 20): Promise<LoggedRequest[]> {
-  return send(`/requests?limit=${limit}`);
+export function ask(question: string, customer: string): Promise<{ answer: string }> {
+  return postJson('/ask', { question, customer });
+}
+
+export function listRequests(customer: string, limit = 5): Promise<LoggedRequest[]> {
+  return send(`/requests?limit=${limit}&customer=${encodeURIComponent(customer)}`);
+}
+
+export function listCustomers(): Promise<string[]> {
+  return send('/customers');
+}
+
+export function listQuestions(): Promise<CatalogQuestion[]> {
+  return send('/questions');
+}
+
+export function addQuestion(text: string): Promise<CatalogQuestion> {
+  return postJson('/questions', { text });
 }

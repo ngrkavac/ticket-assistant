@@ -27,16 +27,34 @@ class RequestHistoryControllerTests {
 
   @Test
   void returnsRecentRequests() throws Exception {
-    given(requestLog.recent(20))
+    given(requestLog.recent(20, null))
         .willReturn(
             List.of(
                 new RequestLogClient.LoggedRequest(
-                    "r-1", "VPN?", "SUCCESS", "2026-11-15T10:42:00Z")));
+                    "r-1", "VPN?", "SUCCESS", null, "2026-11-15T10:42:00Z")));
     mvc.perform(get("/requests").header("X-API-Key", "secret"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$[0].requestId").value("r-1"))
         .andExpect(jsonPath("$[0].question").value("VPN?"))
         .andExpect(jsonPath("$[0].answer").doesNotExist());
+  }
+
+  @Test
+  void filtersByCustomer() throws Exception {
+    given(requestLog.recent(5, "acme"))
+        .willReturn(
+            List.of(
+                new RequestLogClient.LoggedRequest(
+                    "r-2", "Tickets?", "SUCCESS", "acme", "2026-11-15T10:42:00Z")));
+    mvc.perform(get("/requests?limit=5&customer=Acme").header("X-API-Key", "secret"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[0].customer").value("acme"));
+  }
+
+  @Test
+  void rejectsInvalidCustomer() throws Exception {
+    mvc.perform(get("/requests?customer=a%20b").header("X-API-Key", "secret"))
+        .andExpect(status().isBadRequest());
   }
 
   @Test
@@ -55,7 +73,7 @@ class RequestHistoryControllerTests {
 
   @Test
   void logServerFailureIsA503() throws Exception {
-    given(requestLog.recent(5)).willThrow(new RequestLogUnavailableException("down", null));
+    given(requestLog.recent(5, null)).willThrow(new RequestLogUnavailableException("down", null));
     mvc.perform(get("/requests?limit=5").header("X-API-Key", "secret"))
         .andExpect(status().isServiceUnavailable())
         .andExpect(jsonPath("$.detail").value("Request history is temporarily unavailable."));

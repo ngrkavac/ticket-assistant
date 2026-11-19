@@ -9,15 +9,17 @@ function formatDate(iso: string) {
 }
 
 type Props = {
+  customer: string | null;
+  limit: number;
   entries: LoggedRequest[];
   error: string | null;
 };
 
-export function HistoryTable({ entries, error }: Props) {
+export function HistoryTable({ customer, limit, entries, error }: Props) {
   return (
     <section className="history">
       <div className="history__heading">
-        <h2>History</h2>
+        <h2 className="section-title">History{customer ? ` for ${customer}` : ''}</h2>
         <span className="badge">
           {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
         </span>
@@ -30,7 +32,11 @@ export function HistoryTable({ entries, error }: Props) {
           <span role="columnheader">Date asked</span>
         </div>
         {error && <div className="table__empty table__empty--error">{error}</div>}
-        {!error && entries.length === 0 && <div className="table__empty">No questions asked yet.</div>}
+        {!error && entries.length === 0 && (
+          <div className="table__empty">
+            {customer ? `No questions asked for ${customer} yet.` : 'Choose a customer to see its history.'}
+          </div>
+        )}
         {entries.map((entry, i) => (
           <div className="table__row" role="row" key={entry.requestId}>
             <span className="table__index" role="cell">
@@ -47,7 +53,7 @@ export function HistoryTable({ entries, error }: Props) {
         ))}
       </div>
 
-      <p className="hint">Most recent questions appear first.</p>
+      <p className="hint">The last {limit} questions for the selected customer, most recent first.</p>
     </section>
   );
 }

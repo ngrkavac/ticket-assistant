@@ -29,10 +29,18 @@ class RequestLogClient implements DisposableBean {
 
   static final String LIST_TOOL = "listRecentRequests";
 
+  static final String LIST_QUESTIONS_TOOL = "listQuestions";
+
+  static final String ADD_QUESTION_TOOL = "addQuestion";
+
   private static final ObjectMapper JSON = new ObjectMapper();
 
   private static final TypeReference<List<LoggedRequest>> LOGGED_REQUESTS =
       new TypeReference<>() {};
+
+  private static final TypeReference<List<CatalogQuestion>> QUESTIONS = new TypeReference<>() {};
+
+  private static final TypeReference<CatalogQuestion> QUESTION = new TypeReference<>() {};
 
   private static final Logger log = LoggerFactory.getLogger(RequestLogClient.class);
 
@@ -81,7 +89,13 @@ class RequestLogClient implements DisposableBean {
     return client != null;
   }
 
-  void record(String requestId, String question, String answer, String errorType, long durationMs) {
+  void record(
+      String requestId,
+      String question,
+      String customer,
+      String answer,
+      String errorType,
+      long durationMs) {
     if (client == null) {
       return;
     }
@@ -92,6 +106,7 @@ class RequestLogClient implements DisposableBean {
     args.put("status", errorType == null ? "SUCCESS" : "ERROR");
     args.put("errorType", errorType);
     args.put("durationMs", durationMs);
+    args.put("customer", customer);
     try {
       executor.execute(() -> send(requestId, args));
     } catch (RuntimeException e) { // rejected during shutdown
@@ -115,25 +130,57 @@ class RequestLogClient implements DisposableBean {
    * out.
    */
   @JsonIgnoreProperties(ignoreUnknown = true)
-  record LoggedRequest(String requestId, String question, String status, String createdAt) {}
+  record LoggedRequest(
+      String requestId, String question, String status, String customer, String createdAt) {}
+
+  /** A question offered in the UI. */
+  @JsonIgnoreProperties(ignoreUnknown = true)
+  record CatalogQuestion(long id, String text) {}
 
   /**
-   * Reads the newest stored requests through the {@code listRecentRequests} tool (synchronously).
+   * Reads the newest stored requests through the {@code listRecentRequests} tool (synchronously),
+   * only the given customer's when customer is not null.
    *
    * @throws RequestLogUnavailableException if logging is disabled or the server fails
    */
-  List<LoggedRequest> recent(int limit) {
+  List<LoggedRequest> recent(int limit, String customer) {
+    Map<String, Object> args = new HashMap<>();
+    args.put("limit", limit);
+    if (customer != null) {
+      args.put("customer", customer);
+    }
+    return call(LIST_TOOL, args, LOGGED_REQUESTS);
+  }
+
+  /**
+   * @throws RequestLogUnavailableException if logging is disabled or the server fails
+   */
+  List<CatalogQuestion> questions() {
+    return call(LIST_QUESTIONS_TOOL, Map.of(), QUESTIONS);
+  }
+
+  /**
+   * Adds a question to the UI list; returns the existing one if the text is already there.
+   *
+   * @throws RequestLogUnavailableException if logging is disabled or the server fails
+   */
+  CatalogQuestion addQuestion(String text) {
+    return call(ADD_QUESTION_TOOL, Map.of("text", text), QUESTION);
+  }
+
+  /** Calls a tool synchronously and parses its JSON text result. */
+  private <T> T call(String tool, Map<String, Object> args, TypeReference<T> type) {
     if (client == null) {
       throw new RequestLogUnavailableException("Request logging is disabled", null);
     }
     McpSchema.CallToolResult result;
     try {
-      result = client.callTool(new McpSchema.CallToolRequest(LIST_TOOL, Map.of("limit", limit)));
+      result = client.callTool(new McpSchema.CallToolRequest(tool, args));
     } catch (RuntimeException e) {
-      throw new RequestLogUnavailableException("listRecentRequests failed", e);
+      throw new RequestLogUnavailableException(tool + " failed", e);
     }
     if (Boolean.TRUE.equals(result.isError()) || result.content() == null) {
-      throw new RequestLogUnavailableException("listRecentRequests returned an error", null);
+      throw new RequestLogUnavailableException(tool + " returned an error", null);
     }
     String text =
         result.content().stream()
@@ -141,13 +188,11 @@ class RequestLogClient implements DisposableBean {
             .map(c -> ((McpSchema.TextContent) c).text())
             .findFirst()
             .orElseThrow(
-                () ->
-                    new RequestLogUnavailableException(
-                        "listRecentRequests returned no text", null));
+                () -> new RequestLogUnavailableException(tool + " returned no text", null));
     try {
-      return JSON.readValue(text, LOGGED_REQUESTS);
+      return JSON.readValue(text, type);
     } catch (Exception e) {
-      throw new RequestLogUnavailableException("listRecentRequests returned unexpected content", e);
+      throw new RequestLogUnavailableException(tool + " returned unexpected content", e);
     }
   }
 

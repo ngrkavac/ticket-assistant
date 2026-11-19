@@ -2,6 +2,7 @@ package com.example.assistant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -30,7 +31,7 @@ class AssistantServiceTests {
   void returnsModelContent() {
     ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
     when(chat.prompt().user("hi").call().content()).thenReturn("hello");
-    assertThat(new AssistantService(chat, props(2), log).ask("hi")).isEqualTo("hello");
+    assertThat(new AssistantService(chat, props(2), log).ask("hi", null)).isEqualTo("hello");
   }
 
   @Test
@@ -39,9 +40,9 @@ class AssistantServiceTests {
     when(chat.prompt().user("boom").call().content()).thenThrow(new IllegalStateException("down"));
     when(chat.prompt().user("ok").call().content()).thenReturn("fine");
     AssistantService service = new AssistantService(chat, props(1), log);
-    assertThatThrownBy(() -> service.ask("boom")).isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(() -> service.ask("boom", null)).isInstanceOf(IllegalStateException.class);
     // the single permit must be free again
-    assertThat(service.ask("ok")).isEqualTo("fine");
+    assertThat(service.ask("ok", null)).isEqualTo("fine");
   }
 
   @Test
@@ -58,11 +59,12 @@ class AssistantServiceTests {
             });
     AssistantService service = new AssistantService(chat, props(1), log);
     AtomicReference<String> first = new AtomicReference<>();
-    Thread t = new Thread(() -> first.set(service.ask("slow")));
+    Thread t = new Thread(() -> first.set(service.ask("slow", null)));
     t.start();
     started.await();
 
-    assertThatThrownBy(() -> service.ask("other")).isInstanceOf(TooManyRequestsException.class);
+    assertThatThrownBy(() -> service.ask("other", null))
+        .isInstanceOf(TooManyRequestsException.class);
 
     finish.countDown();
     t.join();
@@ -74,7 +76,7 @@ class AssistantServiceTests {
     AssistantService service = new AssistantService(mock(ChatClient.class), props(1), log);
     Thread.currentThread().interrupt();
     try {
-      assertThatThrownBy(() -> service.ask("x")).isInstanceOf(TooManyRequestsException.class);
+      assertThatThrownBy(() -> service.ask("x", null)).isInstanceOf(TooManyRequestsException.class);
       assertThat(Thread.currentThread().isInterrupted()).isTrue();
     } finally {
       Thread.interrupted(); // clear flag for other tests
@@ -87,20 +89,40 @@ class AssistantServiceTests {
     when(chat.prompt().user("hi").call().content()).thenReturn("hello");
     MDC.put("requestId", "req-1");
     try {
-      new AssistantService(chat, props(1), log).ask("hi");
+      new AssistantService(chat, props(1), log).ask("hi", null);
     } finally {
       MDC.remove("requestId");
     }
-    verify(log).record(eq("req-1"), eq("hi"), eq("hello"), isNull(), anyLong());
+    verify(log).record(eq("req-1"), eq("hi"), isNull(), eq("hello"), isNull(), anyLong());
+  }
+
+  @Test
+  void sendsTheCustomerAsContextButLogsTheQuestionAsAsked() {
+    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+    when(chat.prompt().user("Customer: acme\n\nWhat open tickets do we have?").call().content())
+        .thenReturn("T-1001");
+    String answer =
+        new AssistantService(chat, props(1), log).ask("What open tickets do we have?", "acme");
+    assertThat(answer).isEqualTo("T-1001");
+    verify(log)
+        .record(
+            anyString(),
+            eq("What open tickets do we have?"),
+            eq("acme"),
+            eq("T-1001"),
+            isNull(),
+            anyLong());
   }
 
   @Test
   void recordsFailedRequestWithErrorType() {
     ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
     when(chat.prompt().user("boom").call().content()).thenThrow(new IllegalStateException("down"));
-    assertThatThrownBy(() -> new AssistantService(chat, props(1), log).ask("boom"))
+    assertThatThrownBy(() -> new AssistantService(chat, props(1), log).ask("boom", null))
         .isInstanceOf(IllegalStateException.class);
-    verify(log).record(anyString(), eq("boom"), isNull(), eq("IllegalStateException"), anyLong());
+    verify(log)
+        .record(
+            anyString(), eq("boom"), isNull(), isNull(), eq("IllegalStateException"), anyLong());
   }
 
   @Test
@@ -108,10 +130,10 @@ class AssistantServiceTests {
     AssistantService service = new AssistantService(mock(ChatClient.class), props(1), log);
     Thread.currentThread().interrupt();
     try {
-      assertThatThrownBy(() -> service.ask("x")).isInstanceOf(TooManyRequestsException.class);
+      assertThatThrownBy(() -> service.ask("x", null)).isInstanceOf(TooManyRequestsException.class);
     } finally {
       Thread.interrupted();
     }
-    verify(log, never()).record(anyString(), anyString(), anyString(), anyString(), anyLong());
+    verify(log, never()).record(any(), any(), any(), any(), any(), anyLong());
   }
 }

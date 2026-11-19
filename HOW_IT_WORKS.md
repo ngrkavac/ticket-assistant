@@ -93,7 +93,13 @@ Every `/ask` request that reaches the model is stored in Postgres through a seco
 - `ChatConfig.hideRequestLogTools` (an `McpToolFilter`) hides all request-log tools from the LLM. Otherwise a user could ask the model to read other users' questions or forge log entries.
 - Requests rejected before `AssistantService` (401 bad API key, 400 validation, 429 too many requests) are **not** logged.
 
-Table `request_log` (Flyway `V1__request_log.sql`): `id`, `request_id` (unique), `question`, `answer`, `status` (`SUCCESS`/`ERROR`), `error_type`, `duration_ms`, `created_at`.
+Table `request_log` (Flyway `V1__request_log.sql`, `V2__customer_and_questions.sql`): `id`, `request_id` (unique), `question`, `answer`, `status` (`SUCCESS`/`ERROR`), `error_type`, `duration_ms`, `customer` (nullable), `created_at`.
+
+### Customers and the question list (UI)
+
+- `/ask` takes an optional `customer`. `TicketDirectoryClient` checks it against the ticket server's `listCustomers` tool (called from code, not by the model). `AssistantService` then sends `Customer: <name>` followed by a blank line and the question as the user message. The system prompt tells the model to use that customer for ticket tools and not to ask for it again. The log stores the question as typed, with the customer in its own column.
+- `GET /requests?customer=acme&limit=5` filters on that column (`listRecentRequests` with `customer`). The UI shows the last 5 for the selected customer.
+- The UI's questions live in table `question_catalog` (seeded with customer-neutral questions in V2) and are read and added through the `listQuestions` and `addQuestion` tools, behind `GET` and `POST /questions` on the assistant. `addQuestion` is idempotent per text.
 
 ## Tutorial: send a request and verify it was stored
 

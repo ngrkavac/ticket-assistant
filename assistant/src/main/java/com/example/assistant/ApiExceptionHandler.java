@@ -26,6 +26,18 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
   }
 
+  @ExceptionHandler(UnknownCustomerException.class)
+  ProblemDetail unknownCustomer(UnknownCustomerException e) {
+    return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  @ExceptionHandler(TicketsUnavailableException.class)
+  ProblemDetail ticketsUnavailable(TicketsUnavailableException e) {
+    log.warn("Ticket server unavailable: {}", e.getMessage(), e.getCause());
+    return ProblemDetail.forStatusAndDetail(
+        HttpStatus.SERVICE_UNAVAILABLE, "The ticket system is temporarily unavailable.");
+  }
+
   @ExceptionHandler(TooManyRequestsException.class)
   ResponseEntity<ProblemDetail> busy(TooManyRequestsException e) {
     return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)

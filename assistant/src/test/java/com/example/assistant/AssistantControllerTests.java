@@ -1,5 +1,6 @@
 package com.example.assistant;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -27,6 +28,8 @@ class AssistantControllerTests {
 
   @MockitoBean AssistantService service;
 
+  @MockitoBean TicketDirectoryClient tickets;
+
   private org.springframework.test.web.servlet.ResultActions ask(String body, String key)
       throws Exception {
     var req = post("/ask").contentType(MediaType.APPLICATION_JSON).content(body);
@@ -38,11 +41,36 @@ class AssistantControllerTests {
 
   @Test
   void answersWithValidKey() throws Exception {
-    given(service.ask("hi")).willReturn("hello");
+    given(service.ask("hi", null)).willReturn("hello");
     ask("{\"question\":\"hi\"}", "secret")
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.answer").value("hello"))
         .andExpect(header().exists("X-Request-Id"));
+  }
+
+  @Test
+  void passesTheKnownCustomerToTheService() throws Exception {
+    given(tickets.requireKnown("ACME")).willReturn("acme");
+    given(service.ask("hi", "acme")).willReturn("hello acme");
+    ask("{\"question\":\"hi\",\"customer\":\"ACME\"}", "secret")
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.answer").value("hello acme"));
+  }
+
+  @Test
+  void unknownCustomerIs400() throws Exception {
+    given(tickets.requireKnown("umbrella")).willThrow(new UnknownCustomerException());
+    ask("{\"question\":\"hi\",\"customer\":\"umbrella\"}", "secret")
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.detail").value("Unknown customer"));
+  }
+
+  @Test
+  void ticketServerDownWhileCheckingCustomerIs503() throws Exception {
+    given(tickets.requireKnown("acme")).willThrow(new TicketsUnavailableException("down", null));
+    ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret")
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.detail").value("The ticket system is temporarily unavailable."));
   }
 
   @Test
@@ -63,7 +91,7 @@ class AssistantControllerTests {
 
   @Test
   void busyIs429WithRetryAfter() throws Exception {
-    given(service.ask(anyString())).willThrow(new TooManyRequestsException());
+    given(service.ask(anyString(), any())).willThrow(new TooManyRequestsException());
     ask("{\"question\":\"hi\"}", "secret")
         .andExpect(status().isTooManyRequests())
         .andExpect(header().string("Retry-After", "5"));
@@ -71,7 +99,7 @@ class AssistantControllerTests {
 
   @Test
   void bugIs500WithoutLeakingDetails() throws Exception {
-    given(service.ask(anyString())).willThrow(new IllegalStateException("secret internals"));
+    given(service.ask(anyString(), any())).willThrow(new IllegalStateException("secret internals"));
     ask("{\"question\":\"hi\"}", "secret")
         .andExpect(status().isInternalServerError())
         .andExpect(jsonPath("$.detail").value("Internal error."));
@@ -79,7 +107,7 @@ class AssistantControllerTests {
 
   @Test
   void upstreamFailureIsA503WithoutLeakingDetails() throws Exception {
-    given(service.ask(anyString()))
+    given(service.ask(anyString(), any()))
         .willThrow(
             new org.springframework.web.client.ResourceAccessException(
                 "ollama at 10.0.0.5 timed out"));

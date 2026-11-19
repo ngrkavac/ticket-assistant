@@ -49,7 +49,7 @@ class RequestLogClientTests {
     var log = new RequestLogClient(provider(List.of(tickets, requestLog)), props(true));
     assertThat(log.enabled()).isTrue();
 
-    log.record("req-1", "How?", "Like this.", null, 15);
+    log.record("req-1", "How?", null, "Like this.", null, 15);
     log.destroy(); // waits for the background write
 
     ArgumentCaptor<McpSchema.CallToolRequest> call =
@@ -70,7 +70,7 @@ class RequestLogClientTests {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
     var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
-    log.record("req-2", "q", null, "RestClientException", 3);
+    log.record("req-2", "q", null, null, "RestClientException", 3);
     log.destroy();
 
     ArgumentCaptor<McpSchema.CallToolRequest> call =
@@ -86,7 +86,7 @@ class RequestLogClientTests {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenThrow(new IllegalStateException("connection refused"));
     var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
-    log.record("req-3", "q", "a", null, 1);
+    log.record("req-3", "q", null, "a", null, 1);
     log.destroy();
     verify(c).callTool(any());
   }
@@ -97,7 +97,7 @@ class RequestLogClientTests {
     ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     var log = new RequestLogClient(c, executor);
     log.destroy();
-    log.record("req-4", "q", "a", null, 1);
+    log.record("req-4", "q", null, "a", null, 1);
     verify(c, never()).callTool(any());
   }
 
@@ -105,7 +105,7 @@ class RequestLogClientTests {
   void disabledLoggingDoesNothing() {
     var log = new RequestLogClient(provider(List.of()), props(false));
     assertThat(log.enabled()).isFalse();
-    log.record("req-5", "q", "a", null, 1);
+    log.record("req-5", "q", null, "a", null, 1);
     log.destroy();
   }
 
@@ -132,7 +132,7 @@ class RequestLogClientTests {
     String json =
         """
         [{"id":2,"requestId":"r-2","question":"VPN?","answer":"Restart it.","status":"SUCCESS",
-          "errorType":null,"durationMs":12,"createdAt":"2026-11-15T10:42:00Z"}]
+          "errorType":null,"durationMs":12,"customer":"acme","createdAt":"2026-11-15T10:42:00Z"}]
         """;
     when(c.callTool(any()))
         .thenReturn(
@@ -142,14 +142,87 @@ class RequestLogClientTests {
                 .build());
     var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
 
-    assertThat(log.recent(5))
+    assertThat(log.recent(5, null))
         .containsExactly(
-            new RequestLogClient.LoggedRequest("r-2", "VPN?", "SUCCESS", "2026-11-15T10:42:00Z"));
+            new RequestLogClient.LoggedRequest(
+                "r-2", "VPN?", "SUCCESS", "acme", "2026-11-15T10:42:00Z"));
     ArgumentCaptor<McpSchema.CallToolRequest> call =
         ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
     verify(c).callTool(call.capture());
     assertThat(call.getValue().name()).isEqualTo("listRecentRequests");
-    assertThat(call.getValue().arguments()).containsEntry("limit", 5);
+    assertThat(call.getValue().arguments()).containsEntry("limit", 5).doesNotContainKey("customer");
+  }
+
+  @Test
+  void recentPassesTheCustomerFilter() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any())).thenReturn(text("[]"));
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+
+    assertThat(log.recent(5, "acme")).isEmpty();
+    ArgumentCaptor<McpSchema.CallToolRequest> call =
+        ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
+    verify(c).callTool(call.capture());
+    assertThat(call.getValue().arguments())
+        .containsEntry("limit", 5)
+        .containsEntry("customer", "acme");
+  }
+
+  @Test
+  void recordsTheCustomer() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(false).build());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    log.record("req-6", "q", "globex", "a", null, 1);
+    log.destroy();
+
+    ArgumentCaptor<McpSchema.CallToolRequest> call =
+        ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
+    verify(c).callTool(call.capture());
+    assertThat(call.getValue().arguments()).containsEntry("customer", "globex");
+  }
+
+  @Test
+  void listsAndAddsQuestions() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any()))
+        .thenReturn(
+            text(
+                """
+                [{"id":1,"text":"How do I reset my password?","createdAt":"2026-11-15T10:42:00Z"}]
+                """))
+        .thenReturn(
+            text("{\"id\":7,\"text\":\"Printer?\",\"createdAt\":\"2026-11-17T09:00:00Z\"}"));
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+
+    assertThat(log.questions())
+        .containsExactly(new RequestLogClient.CatalogQuestion(1, "How do I reset my password?"));
+    assertThat(log.addQuestion("Printer?"))
+        .isEqualTo(new RequestLogClient.CatalogQuestion(7, "Printer?"));
+
+    ArgumentCaptor<McpSchema.CallToolRequest> call =
+        ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
+    verify(c, org.mockito.Mockito.times(2)).callTool(call.capture());
+    assertThat(call.getAllValues().get(0).name()).isEqualTo("listQuestions");
+    assertThat(call.getAllValues().get(1).name()).isEqualTo("addQuestion");
+    assertThat(call.getAllValues().get(1).arguments()).containsEntry("text", "Printer?");
+  }
+
+  @Test
+  void questionsFailWhenServerErrors() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    assertThatThrownBy(log::questions).isInstanceOf(RequestLogUnavailableException.class);
+    assertThatThrownBy(() -> log.addQuestion("q"))
+        .isInstanceOf(RequestLogUnavailableException.class);
+  }
+
+  private static McpSchema.CallToolResult text(String json) {
+    return McpSchema.CallToolResult.builder()
+        .isError(false)
+        .addContent(new McpSchema.TextContent(json))
+        .build();
   }
 
   @Test
@@ -157,13 +230,16 @@ class RequestLogClientTests {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
     var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
-    assertThatThrownBy(() -> log.recent(5)).isInstanceOf(RequestLogUnavailableException.class);
+    assertThatThrownBy(() -> log.recent(5, null))
+        .isInstanceOf(RequestLogUnavailableException.class);
 
     when(c.callTool(any())).thenThrow(new IllegalStateException("connection refused"));
-    assertThatThrownBy(() -> log.recent(5)).isInstanceOf(RequestLogUnavailableException.class);
+    assertThatThrownBy(() -> log.recent(5, null))
+        .isInstanceOf(RequestLogUnavailableException.class);
 
     var disabled = new RequestLogClient(provider(List.of()), props(false));
-    assertThatThrownBy(() -> disabled.recent(5)).isInstanceOf(RequestLogUnavailableException.class);
+    assertThatThrownBy(() -> disabled.recent(5, null))
+        .isInstanceOf(RequestLogUnavailableException.class);
   }
 
   private static org.springframework.ai.mcp.McpConnectionInfo info(String connection) {

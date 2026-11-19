@@ -6,7 +6,7 @@ an IT helpdesk assistant.
 | Module | Role |
 |---|---|
 | `ticket-mcp-server-java` / `-python` / `-rust` (port 8081) | **MCP server** exposing per-customer ticket tools `listCustomers`, `getTicket`, `listOpenTickets`, `listTickets` and `createTicket` (in-memory demo tickets for acme, globex and initech) over SSE. Three interchangeable implementations of the same contract; run one of them (see [Ticket server implementations](#ticket-server-implementations)) |
-| `request-log-mcp-server` (port 8082) | **MCP server** backed by a database (PostgreSQL in compose, in-memory H2 by default) that stores every `/ask` request. Tools: `logRequest`, `getRequest`, `listRecentRequests` |
+| `request-log-mcp-server` (port 8082) | **MCP server** backed by a database (PostgreSQL in compose, in-memory H2 by default) that stores every `/ask` request. Tools: `logRequest`, `getRequest`, `listRecentRequests`, plus `listQuestions` / `addQuestion` for the UI's question list |
 | `assistant` (port 8080) | **MCP client** + **RAG**: markdown KB in `assistant/src/main/resources/kb` is embedded locally (ONNX, no API key) into an in-memory `SimpleVectorStore`; a local Ollama model (llama3.1, free) answers via `QuestionAnswerAdvisor` and can call the MCP tools |
 
 Stack: Java 21, Spring Boot 3.5, Spring AI 1.1.8, Maven, Ollama (no paid API). The alternative ticket servers use Python 3.12 + the MCP Python SDK (uv) and Rust + axum (cargo).
@@ -68,24 +68,39 @@ The Python and Rust servers read `PORT` (default `8081`) and `HOST` (default `0.
 
 ## Web UI (`ui/`)
 
-Minimal React + TypeScript (Vite) page, built from the Figma frame in `FIGMA_IMPLEMENTATION_PLAN.md`: pick a predefined question, press **Ask**, and see the questions stored in the request log (newest first).
+Minimal React + TypeScript (Vite) page, built from the Figma frame in `FIGMA_IMPLEMENTATION_PLAN.md` and extended in `CUSTOMER_QUESTIONS_UI_PLAN.md`:
+
+- **Customer** dropdown, filled from the ticket server (`GET /customers`). Every question is asked for this customer.
+- **Questions** checklist, loaded from the request-log database (`GET /questions`). Tick one or more and press **Add**: they are asked one after another, and each answer becomes a row in the history.
+- **New question**: type a question and press **Add to list**. It is stored in the database (`POST /questions`), so every browser sees it, and it is ticked, ready to ask.
+- **History** shows the last 5 requests for the selected customer (`GET /requests?customer=…&limit=5`).
 
 ```bash
 cd ui && npm install
 HELPDESK_API_KEY=... npm run dev     # http://localhost:5173 (or put the key in ui/.env.local)
 ```
 
-The Vite dev server proxies `/ask` and `/requests` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`) and adds the `X-API-Key` header itself, so the key never reaches the browser.
+The Vite dev server proxies `/ask`, `/requests`, `/customers` and `/questions` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`) and adds the `X-API-Key` header itself, so the key never reaches the browser.
 
-In Docker Compose the UI is the `ui` service, also on http://localhost:5173 (published on loopback only). `ui/Dockerfile` builds the static files and serves them with unprivileged nginx, which does what the dev proxy does: it forwards `/ask` and `/requests` to `assistant:8080` and adds `X-API-Key` from `HELPDESK_API_KEY` at container start (`ui/nginx.conf.template`). Stop `npm run dev` first if it is running, because both use port 5173. Anyone who can reach the UI can use the assistant with that key, so put real authentication in front of it before exposing it beyond localhost.
+In Docker Compose the UI is the `ui` service, also on http://localhost:5173 (published on loopback only). `ui/Dockerfile` builds the static files and serves them with unprivileged nginx, which does what the dev proxy does: it forwards `/ask`, `/requests`, `/customers` and `/questions` to `assistant:8080` and adds `X-API-Key` from `HELPDESK_API_KEY` at container start (`ui/nginx.conf.template`). Stop `npm run dev` first if it is running, because both use port 5173. Anyone who can reach the UI can use the assistant with that key, so put real authentication in front of it before exposing it beyond localhost.
 
-`GET /requests?limit=20` (1-100, same API key as `/ask`) returns `requestId`, `question`, `status`, `createdAt` of the newest requests by calling the request-log server's `listRecentRequests` tool. Answers and error details are not returned. 503 if the log server is unavailable or logging is disabled.
+UI endpoints on the assistant (all need the same API key as `/ask`):
+
+| Endpoint | Returns |
+|---|---|
+| `POST /ask` `{"question", "customer"?}` | `{"answer"}`. When `customer` is given it must be known to the ticket server (400 `Unknown customer` otherwise). The model receives `Customer: <name>` in front of the question; the log stores the question as typed plus the customer |
+| `GET /requests?limit=20&customer=acme` | `requestId`, `question`, `status`, `customer`, `createdAt` of the newest requests (limit 1-100), only that customer's when `customer` is given (`listRecentRequests`). Answers and error details are not returned |
+| `GET /customers` | customer names from the ticket server's `listCustomers` tool (503 if it is down) |
+| `GET /questions` | `[{"id", "text"}]` from the request-log server's `listQuestions` tool |
+| `POST /questions` `{"text"}` | 201 with `{"id", "text"}` (`addQuestion`). Max `helpdesk.max-question-length` characters; adding the same text again returns the existing question |
+
+The request-log endpoints return 503 if the log server is unavailable or logging is disabled.
 
 ## Request log
 
-After every `/ask` that reaches the model, the assistant calls the `logRequest` tool on `request-log-mcp-server` (MCP connection `requestlog`) with the request id (same as the `X-Request-Id` header), question, answer, status (`SUCCESS`/`ERROR`), error class and duration. The call runs in the background: if the log server is slow or down, the user still gets the answer and the assistant logs a warning (without the question text). Requests rejected before the model call (401, 400, 429) are not stored. `logRequest` is idempotent per request id.
+After every `/ask` that reaches the model, the assistant calls the `logRequest` tool on `request-log-mcp-server` (MCP connection `requestlog`) with the request id (same as the `X-Request-Id` header), question, customer (if any), answer, status (`SUCCESS`/`ERROR`), error class and duration. The call runs in the background: if the log server is slow or down, the user still gets the answer and the assistant logs a warning (without the question text). Requests rejected before the model call (401, 400, 429) are not stored. `logRequest` is idempotent per request id.
 
-The request-log tools are filtered out of the model's tool list (`McpToolFilter` in `ChatConfig`), so users cannot read other users' questions or write fake entries through the chat. Read the log from any MCP client (e.g. MCP Inspector against `http://localhost:8082/sse`) with `getRequest` / `listRecentRequests`, or query the `request_log` table directly. The schema is managed by Flyway (`request-log-mcp-server/src/main/resources/db/migration`).
+The request-log tools are filtered out of the model's tool list (`McpToolFilter` in `ChatConfig`), so users cannot read other users' questions or write fake entries through the chat. Read the log from any MCP client (e.g. MCP Inspector against `http://localhost:8082/sse`) with `getRequest` / `listRecentRequests` / `listQuestions`, or query the `request_log` and `question_catalog` tables directly. `addQuestion` is denied for Claude Code in `.claude/settings.json`, like `logRequest`. The schema is managed by Flyway (`request-log-mcp-server/src/main/resources/db/migration`).
 
 Config: `REQUEST_LOG_MCP_URL` (assistant, default `http://localhost:8082`), `REQUEST_LOG_ENABLED=false` to turn logging off (the connection is still opened at startup; remove `spring.ai.mcp.client.sse.connections.requestlog.url` to drop it entirely), and on the server `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD`.
 
@@ -105,7 +120,7 @@ Java code follows [Google Java Style](https://google.github.io/styleguide/javagu
 | Area | What is in place |
 |---|---|
 | API | `POST /ask` with bean validation, configurable max length (`helpdesk.max-question-length`), RFC 7807 errors; upstream failures return a generic 503 (no internals leaked) |
-| Auth | Set `HELPDESK_API_KEY` to require an `X-API-Key` header on `/ask` (constant-time compare). The MCP servers have no auth: keep them on a private network (compose publishes neither them nor PostgreSQL) |
+| Auth | Set `HELPDESK_API_KEY` to require an `X-API-Key` header on `/ask`, `/requests`, `/customers` and `/questions` (constant-time compare). The MCP servers have no auth: keep them on a private network (compose publishes neither them nor PostgreSQL) |
 | Prompt safety | System prompt treats user/ticket text as data; ticket tool inputs are validated |
 | Resilience | Virtual threads, max 8 concurrent LLM calls (`helpdesk.max-concurrent-requests`; extra requests get 429 + `Retry-After`), HTTP connect/read timeouts for the LLM, 20s MCP request timeout, graceful shutdown. LLM/MCP failures map to 503, our own bugs to 500. The assistant needs the MCP server reachable at startup (compose enforces ordering) |
 | Observability | Actuator on a separate management port (`9090`, not published in compose): `health` (liveness/readiness; readiness includes the KB-indexed check), `metrics`, `prometheus`; `X-Request-Id` header and request id in every log line; question text is never written to application logs (it is stored in the request-log database, see above) |

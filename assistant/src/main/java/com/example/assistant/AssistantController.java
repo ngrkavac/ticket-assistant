@@ -14,13 +14,20 @@ class AssistantController {
 
   private final HelpdeskProperties props;
 
-  AssistantController(AssistantService service, HelpdeskProperties props) {
+  private final TicketDirectoryClient tickets;
+
+  AssistantController(
+      AssistantService service, HelpdeskProperties props, TicketDirectoryClient tickets) {
     this.service = service;
     this.props = props;
+    this.tickets = tickets;
   }
 
-  // Hard upper bound; the configurable helpdesk.max-question-length is checked in the handler.
-  record Question(@NotBlank @Size(max = 10000) String question) {}
+  /**
+   * The customer is optional; when given it must be known to the ticket server. Hard upper bound on
+   * the question; the configurable helpdesk.max-question-length is checked in the handler.
+   */
+  record Question(@NotBlank @Size(max = 10000) String question, @Size(max = 64) String customer) {}
 
   record Answer(String answer) {}
 
@@ -29,6 +36,6 @@ class AssistantController {
     if (q.question().length() > props.maxQuestionLength()) {
       throw new QuestionTooLongException(props.maxQuestionLength());
     }
-    return new Answer(service.ask(q.question()));
+    return new Answer(service.ask(q.question(), tickets.requireKnown(q.customer())));
   }
 }

@@ -5,7 +5,7 @@ server {
     root /usr/share/nginx/html;
 
     # API calls go to the assistant; the API key is added here, never sent to the browser.
-    location ~ ^/(ask|requests)$ {
+    location ~ ^/(ask|requests|customers|questions)$ {
         proxy_pass ${ASSISTANT_URL};
         proxy_set_header X-API-Key "${HELPDESK_API_KEY}";
         proxy_set_header Host $host;

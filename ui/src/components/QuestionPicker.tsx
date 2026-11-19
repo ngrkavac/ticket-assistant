@@ -1,45 +1,50 @@
-import { useState } from 'react';
-import { QUESTIONS } from '../questions';
+import type { CatalogQuestion } from '../api';
 
 type Props = {
+  questions: CatalogQuestion[];
+  error: string | null;
+  selected: Set<number>;
   busy: boolean;
+  canAsk: boolean;
   message: { text: string; error?: boolean } | null;
-  onAsk: (question: string) => void;
+  onToggle: (id: number) => void;
+  onAsk: () => void;
 };
 
-export function QuestionPicker({ busy, message, onAsk }: Props) {
-  const [question, setQuestion] = useState<string>(QUESTIONS[0]);
+export function QuestionPicker({ questions, error, selected, busy, canAsk, message, onToggle, onAsk }: Props) {
+  const count = selected.size;
 
   return (
     <form
       className="picker"
       onSubmit={(e) => {
         e.preventDefault();
-        onAsk(question);
+        onAsk();
       }}
     >
-      <label className="picker__label" htmlFor="question">
-        Predefined question
-      </label>
-      <div className="picker__controls">
-        <div className="select">
-          <select id="question" value={question} onChange={(e) => setQuestion(e.target.value)} disabled={busy}>
-            {QUESTIONS.map((q) => (
-              <option key={q} value={q}>
-                {q}
-              </option>
+      <fieldset className="checklist" disabled={busy}>
+        <legend className="section-title">Questions</legend>
+        {error && <p className="hint hint--error">{error}</p>}
+        {!error && questions.length === 0 && <p className="hint">Loading questions…</p>}
+        {questions.length > 0 && (
+          <div className="checklist__box">
+            {questions.map((q) => (
+              <label className="checklist__item" key={q.id}>
+                <input type="checkbox" checked={selected.has(q.id)} onChange={() => onToggle(q.id)} />
+                <span>{q.text}</span>
+              </label>
             ))}
-          </select>
-          <span className="select__chevron" aria-hidden="true">
-            ⌄
-          </span>
-        </div>
-        <button className="button" type="submit" disabled={busy}>
-          {busy ? 'Asking…' : 'Ask'}
+          </div>
+        )}
+      </fieldset>
+      <div className="picker__controls">
+        <button className="button" type="submit" disabled={busy || count === 0 || !canAsk}>
+          {busy ? 'Asking…' : count > 1 ? `Add ${count}` : 'Add'}
         </button>
       </div>
       <p className={`hint${message?.error ? ' hint--error' : ''}`} role="status">
-        {message?.text ?? `${QUESTIONS.length} questions available. Each one is sent to the assistant and stored in the request log.`}
+        {message?.text ??
+          `${count} of ${questions.length} selected. Each selected question is sent to the assistant for the chosen customer and stored in the request log.`}
       </p>
     </form>
   );

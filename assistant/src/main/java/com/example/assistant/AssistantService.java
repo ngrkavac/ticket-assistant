@@ -28,7 +28,11 @@ class AssistantService {
     this.permits = new Semaphore(props.maxConcurrentRequests());
   }
 
-  public String ask(String question) {
+  /**
+   * Asks the model. When a customer is given it is put in front of the question as context, so
+   * ticket tools are called for that customer; the log stores the question as typed.
+   */
+  public String ask(String question, String customer) {
     try {
       if (!permits.tryAcquire(QUEUE_WAIT_MS, TimeUnit.MILLISECONDS)) {
         throw new TooManyRequestsException();
@@ -42,7 +46,7 @@ class AssistantService {
     String answer = null;
     String errorType = null;
     try {
-      answer = chat.prompt().user(question).call().content();
+      answer = chat.prompt().user(userMessage(question, customer)).call().content();
       return answer;
     } catch (RuntimeException | Error e) {
       errorType = e.getClass().getSimpleName();
@@ -50,8 +54,17 @@ class AssistantService {
     } finally {
       permits.release();
       requestLog.record(
-          requestId, question, answer, errorType, (System.nanoTime() - start) / 1_000_000);
+          requestId,
+          question,
+          customer,
+          answer,
+          errorType,
+          (System.nanoTime() - start) / 1_000_000);
     }
+  }
+
+  static String userMessage(String question, String customer) {
+    return customer == null ? question : "Customer: " + customer + "\n\n" + question;
   }
 
   /** Same id as the X-Request-Id header (set by {@link RequestIdFilter}). */
