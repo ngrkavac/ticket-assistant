@@ -72,6 +72,7 @@ class LocalSecurityTests {
     var auth = SecurityContextHolder.getContext().getAuthentication();
     assertThat(auth.isAuthenticated()).isTrue();
     assertThat(auth.getName()).isEqualTo(ApiKeyFilter.LOCAL_USER);
+    assertThat(HelpdeskPrincipal.of(auth)).isEqualTo(HelpdeskPrincipal.LOCAL);
     assertThat(auth.getAuthorities())
         .extracting(GrantedAuthority::getAuthority)
         .containsExactlyInAnyOrder("helpdesk-agent", "helpdesk-admin", "tickets-write");

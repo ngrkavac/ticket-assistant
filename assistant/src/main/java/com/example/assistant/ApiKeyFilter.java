@@ -7,7 +7,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.List;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.AuthorityUtils;
@@ -21,17 +20,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * header is authenticated as the local user; without it, the request stays anonymous and the
  * security chain answers 401. With a blank key every request is authenticated as the local user.
  *
- * <p>The local user has every role. It is registered only in the {@code local} security chain (see
- * {@link SecurityConfig}), never as a servlet filter of its own.
+ * <p>The local user ({@link HelpdeskPrincipal#LOCAL}) has every role and every customer. It is
+ * registered only in the {@code local} security chain (see {@link SecurityConfig}), never as a
+ * servlet filter of its own.
  */
 class ApiKeyFilter extends OncePerRequestFilter {
 
   static final String HEADER = "X-API-Key";
 
   static final String LOCAL_USER = "local";
-
-  static final List<String> LOCAL_ROLES =
-      List.of(SecurityConfig.ROLE_AGENT, SecurityConfig.ROLE_ADMIN, SecurityConfig.ROLE_WRITER);
 
   private final byte[] expected;
 
@@ -63,6 +60,9 @@ class ApiKeyFilter extends OncePerRequestFilter {
 
   static Authentication localUser() {
     return UsernamePasswordAuthenticationToken.authenticated(
-        LOCAL_USER, null, AuthorityUtils.createAuthorityList(LOCAL_ROLES));
+        HelpdeskPrincipal.LOCAL,
+        null,
+        AuthorityUtils.createAuthorityList(
+            HelpdeskPrincipal.LOCAL.roles().stream().sorted().toList()));
   }
 }

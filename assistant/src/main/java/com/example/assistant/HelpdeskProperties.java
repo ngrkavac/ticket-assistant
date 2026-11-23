@@ -26,7 +26,7 @@ public record HelpdeskProperties(
 
   public HelpdeskProperties {
     rag = rag == null ? new Rag(3, 0.3) : rag;
-    security = security == null ? new Security(null) : security;
+    security = security == null ? new Security(null, null, null) : security;
     kb =
         kb == null || kb.location() == null || kb.location().isBlank()
             ? new Kb(Kb.DEFAULT_LOCATION)
@@ -98,8 +98,25 @@ public record HelpdeskProperties(
   }
 
   /**
-   * Only used in the {@code local} profile: the X-API-Key that callers must send. If blank, the API
-   * is open (see {@link ApiKeyFilter}). Other profiles authenticate with OIDC bearer tokens.
+   * Authentication settings. {@code rolesClaim} and {@code customersClaim} name the JWT claims (K1)
+   * that hold the user's roles and allowed customers; a dotted name such as {@code
+   * realm_access.roles} reads a nested claim. {@code apiKey} is only used in the {@code local}
+   * profile: the X-API-Key that callers must send, or blank for an open API (see {@link
+   * ApiKeyFilter}).
    */
-  public record Security(String apiKey) {}
+  public record Security(String apiKey, String rolesClaim, String customersClaim) {
+
+    static final String DEFAULT_ROLES_CLAIM = "roles";
+
+    static final String DEFAULT_CUSTOMERS_CLAIM = "customers";
+
+    public Security {
+      rolesClaim =
+          rolesClaim == null || rolesClaim.isBlank() ? DEFAULT_ROLES_CLAIM : rolesClaim.trim();
+      customersClaim =
+          customersClaim == null || customersClaim.isBlank()
+              ? DEFAULT_CUSTOMERS_CLAIM
+              : customersClaim.trim();
+    }
+  }
 }

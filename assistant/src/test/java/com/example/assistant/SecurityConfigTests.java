@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.support.StaticListableBeanFactory;
@@ -32,18 +33,27 @@ import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 /**
  * The OIDC chain with real signed tokens: Boot's JWT decoder is configured with a test public key
  * (instead of an issuer's JWKS) and the audience from application.properties' default.
  */
 @WebMvcTest(CustomerController.class)
-@Import({SecurityConfig.class, RequestIdFilter.class, ApiExceptionHandler.class})
+@Import({
+  SecurityConfig.class,
+  RequestIdFilter.class,
+  ApiExceptionHandler.class,
+  SecurityConfigTests.WhoAmI.class
+})
 @EnableConfigurationProperties(HelpdeskProperties.class)
 class SecurityConfigTests {
 
@@ -166,11 +176,52 @@ class SecurityConfigTests {
     mvc.perform(get("/customers;jsessionid=x")).andExpect(status().isBadRequest());
   }
 
+  @Test
+  void tokenClaimsBecomeTheHelpdeskPrincipal() throws Exception {
+    var claims =
+        new JWTClaimsSet.Builder()
+            .claim("preferred_username", "acme-writer")
+            .claim("roles", List.of("helpdesk-agent", "tickets-write"))
+            .claim("customers", List.of("ACME"));
+    mvc.perform(
+            get("/test/whoami")
+                .header("Authorization", "Bearer " + token(KEY, "helpdesk-assistant", 300, claims)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.name").value("user-1"))
+        .andExpect(jsonPath("$.principal.username").value("acme-writer"))
+        .andExpect(jsonPath("$.principal.customers[0]").value("acme"))
+        .andExpect(jsonPath("$.principal.allCustomers").value(false))
+        .andExpect(jsonPath("$.authorities.length()").value(2))
+        .andExpect(jsonPath("$.authorities[0]").value("helpdesk-agent"))
+        .andExpect(jsonPath("$.authorities[1]").value("tickets-write"));
+  }
+
+  /** Shows what the security chain authenticated, as controllers will see it. */
+  @RestController
+  static class WhoAmI {
+
+    @GetMapping("/test/whoami")
+    Map<String, Object> whoami(Authentication authentication) {
+      return Map.of(
+          "name",
+          authentication.getName(),
+          "principal",
+          HelpdeskPrincipal.of(authentication),
+          "authorities",
+          authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList());
+    }
+  }
+
   static String token(RSAKey key, String audience, long expiresInSeconds) {
+    return token(key, audience, expiresInSeconds, new JWTClaimsSet.Builder());
+  }
+
+  static String token(
+      RSAKey key, String audience, long expiresInSeconds, JWTClaimsSet.Builder builder) {
     try {
       Instant now = Instant.now();
       var claims =
-          new JWTClaimsSet.Builder()
+          builder
               .subject("user-1")
               .audience(audience)
               .issueTime(Date.from(now.minusSeconds(600)))
