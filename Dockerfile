@@ -6,7 +6,13 @@ COPY mvnw pom.xml ./
 COPY ticket-mcp-server-java/pom.xml ticket-mcp-server-java/
 COPY request-log-mcp-server/pom.xml request-log-mcp-server/
 COPY assistant/pom.xml assistant/
-RUN ./mvnw -q -B dependency:go-offline
+# Dependencies are resolved into a BuildKit cache mount, so a pom change on the same builder only
+# downloads what is new. They are then copied into this layer as well: CI restores layers from its
+# layer cache but not cache mounts, and the package step must find them there. Flaky downloads are
+# retried (.mvn/maven.config). `locked` stops parallel image builds writing the same repository.
+RUN --mount=type=cache,target=/m2cache,sharing=locked \
+    ./mvnw -q -B -Dmaven.repo.local=/m2cache/repository dependency:go-offline \
+ && mkdir -p /root/.m2 && cp -a /m2cache/repository /root/.m2/repository
 COPY . .
 ARG MODULE
 # Pick the single executable jar for any version (SNAPSHOT or release), skipping
