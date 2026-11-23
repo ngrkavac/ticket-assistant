@@ -3,14 +3,19 @@ package com.example.assistant;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
@@ -20,8 +25,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * Stores each /ask request in the request-log MCP server by calling its {@code logRequest} tool
- * directly (not through the model). Writes run in the background, so a slow or failing log server
- * never delays or fails the user's request; failures are only logged (without the question text).
+ * directly (not through the model). Writes run in the background on a bounded executor, so a slow
+ * or failing log server never delays or fails the user's request: when the queue is full the write
+ * is dropped. Failures are only logged (without the question text) and counted in {@code
+ * helpdesk_requestlog_writes_total{outcome="stored|failed|dropped"}}.
  */
 @Component
 class RequestLogClient implements DisposableBean {
@@ -33,6 +40,8 @@ class RequestLogClient implements DisposableBean {
   static final String LIST_QUESTIONS_TOOL = "listQuestions";
 
   static final String ADD_QUESTION_TOOL = "addQuestion";
+
+  static final String WRITES_METRIC = "helpdesk.requestlog.writes";
 
   /** Phrases in the request-log server's IllegalArgumentException messages (lower case). */
   private static final List<String> VALIDATION_MARKERS =
@@ -53,15 +62,52 @@ class RequestLogClient implements DisposableBean {
 
   private final ExecutorService executor;
 
+  private final Counter stored;
+
+  private final Counter failed;
+
+  private final Counter dropped;
+
   @Autowired
-  RequestLogClient(ObjectProvider<List<McpSyncClient>> clients, HelpdeskProperties props) {
+  RequestLogClient(
+      ObjectProvider<List<McpSyncClient>> clients, HelpdeskProperties props, MeterRegistry meters) {
     this(
-        find(clients.getIfAvailable(List::of), props), Executors.newVirtualThreadPerTaskExecutor());
+        find(clients.getIfAvailable(List::of), props),
+        boundedExecutor(props.requestLog().writeThreads(), props.requestLog().queueCapacity()),
+        meters);
   }
 
-  RequestLogClient(McpSyncClient client, ExecutorService executor) {
+  RequestLogClient(McpSyncClient client, ExecutorService executor, MeterRegistry meters) {
     this.client = client;
     this.executor = executor;
+    this.stored = writes(meters, "stored");
+    this.failed = writes(meters, "failed");
+    this.dropped = writes(meters, "dropped");
+  }
+
+  private static Counter writes(MeterRegistry meters, String outcome) {
+    return Counter.builder(WRITES_METRIC)
+        .description("Background writes of /ask requests to the request-log server")
+        .tag("outcome", outcome)
+        .register(meters);
+  }
+
+  /**
+   * At most {@code threads} virtual threads write concurrently and at most {@code queueCapacity}
+   * writes wait; anything beyond that is rejected (AbortPolicy) and dropped by {@link #record}.
+   */
+  static ThreadPoolExecutor boundedExecutor(int threads, int queueCapacity) {
+    ThreadPoolExecutor executor =
+        new ThreadPoolExecutor(
+            threads,
+            threads,
+            30,
+            TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(queueCapacity),
+            Thread.ofVirtual().name("request-log-", 0).factory(),
+            new ThreadPoolExecutor.AbortPolicy());
+    executor.allowCoreThreadTimeOut(true);
+    return executor;
   }
 
   private static McpSyncClient find(List<McpSyncClient> clients, HelpdeskProperties props) {
@@ -114,8 +160,9 @@ class RequestLogClient implements DisposableBean {
     args.put("customer", customer);
     try {
       executor.execute(() -> send(requestId, args));
-    } catch (RuntimeException e) { // rejected during shutdown
-      log.warn("Request {} not stored: {}", requestId, e.toString());
+    } catch (RejectedExecutionException e) { // queue full or shutting down
+      dropped.increment();
+      log.warn("Request {} not stored: request-log write queue is full or closed", requestId);
     }
   }
 
@@ -123,9 +170,13 @@ class RequestLogClient implements DisposableBean {
     try {
       McpSchema.CallToolResult result = client.callTool(new McpSchema.CallToolRequest(TOOL, args));
       if (Boolean.TRUE.equals(result.isError())) {
+        failed.increment();
         log.warn("Request {} not stored: request-log server returned an error", requestId);
+      } else {
+        stored.increment();
       }
     } catch (RuntimeException e) {
+      failed.increment();
       log.warn("Request {} not stored: {}", requestId, e.getClass().getSimpleName());
     }
   }
