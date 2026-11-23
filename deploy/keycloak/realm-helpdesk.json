@@ -1,0 +1,297 @@
+{
+  "realm": "helpdesk",
+  "displayName": "Resolva helpdesk - LOCAL DEVELOPMENT ONLY (demo users, public passwords)",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "roles": {
+    "realm": [
+      {
+        "name": "helpdesk-agent",
+        "description": "Can ask about the customers in the user's customers attribute"
+      },
+      {
+        "name": "helpdesk-admin",
+        "description": "Can manage the question catalog"
+      },
+      {
+        "name": "tickets-write",
+        "description": "The assistant may create tickets for this user"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "helpdesk-assistant",
+      "name": "Helpdesk assistant API",
+      "description": "Resource server: only the access-token audience, no login flows.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "enabled": true,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "audience helpdesk-assistant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "helpdesk-assistant",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "customers",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "user.attribute": "customers",
+            "claim.name": "customers",
+            "multivalued": "true",
+            "aggregate.attrs": "false",
+            "jsonType.label": "String"
+          }
+        }
+      ],
+      "clientId": "helpdesk-ui",
+      "name": "Helpdesk UI (oauth2-proxy)",
+      "description": "Confidential client for oauth2-proxy in front of the UI. The default secret is for LOCAL DEVELOPMENT ONLY.",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${HELPDESK_UI_CLIENT_SECRET:local-only-client-secret}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:5173/oauth2/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:5173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      }
+    },
+    {
+      "enabled": true,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "audience helpdesk-assistant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "helpdesk-assistant",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "claim.name": "roles",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "customers",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "user.attribute": "customers",
+            "claim.name": "customers",
+            "multivalued": "true",
+            "aggregate.attrs": "false",
+            "jsonType.label": "String"
+          }
+        }
+      ],
+      "clientId": "helpdesk-dev-cli",
+      "name": "Helpdesk dev CLI - LOCAL DEVELOPMENT ONLY",
+      "description": "Public client with the password grant, for curl and the E2E smoke test. Never create it outside local development.",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true
+    }
+  ],
+  "scopeMappings": [
+    {
+      "client": "helpdesk-ui",
+      "roles": [
+        "helpdesk-agent",
+        "helpdesk-admin",
+        "tickets-write"
+      ]
+    },
+    {
+      "client": "helpdesk-dev-cli",
+      "roles": [
+        "helpdesk-agent",
+        "helpdesk-admin",
+        "tickets-write"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "acme-agent",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "acme-agent@helpdesk.local",
+      "firstName": "Acme",
+      "lastName": "Agent",
+      "attributes": {
+        "customers": [
+          "acme"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "helpdesk-agent"
+      ]
+    },
+    {
+      "username": "globex-agent",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "globex-agent@helpdesk.local",
+      "firstName": "Globex",
+      "lastName": "Agent",
+      "attributes": {
+        "customers": [
+          "globex"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "helpdesk-agent"
+      ]
+    },
+    {
+      "username": "acme-writer",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "acme-writer@helpdesk.local",
+      "firstName": "Acme",
+      "lastName": "Writer",
+      "attributes": {
+        "customers": [
+          "acme"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "helpdesk-agent",
+        "tickets-write"
+      ]
+    },
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@helpdesk.local",
+      "firstName": "Helpdesk",
+      "lastName": "Admin",
+      "attributes": {
+        "customers": [
+          "*"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "local-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "helpdesk-agent",
+        "helpdesk-admin",
+        "tickets-write"
+      ]
+    }
+  ],
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"attributes\": [{\"name\": \"username\", \"displayName\": \"${username}\", \"validations\": {\"length\": {\"min\": 3, \"max\": 255}, \"username-prohibited-characters\": {}, \"up-username-not-idn-homograph\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"email\", \"displayName\": \"${email}\", \"validations\": {\"email\": {}, \"length\": {\"max\": 255}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false, \"required\": {\"roles\": [\"admin\", \"user\"]}}, {\"name\": \"firstName\", \"displayName\": \"${firstName}\", \"validations\": {\"length\": {\"max\": 255}, \"person-name-prohibited-characters\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false, \"required\": {\"roles\": [\"admin\", \"user\"]}}, {\"name\": \"lastName\", \"displayName\": \"${lastName}\", \"validations\": {\"length\": {\"max\": 255}, \"person-name-prohibited-characters\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false, \"required\": {\"roles\": [\"admin\", \"user\"]}}, {\"name\": \"customers\", \"displayName\": \"Customers (lower-case ids, or * for all)\", \"validations\": {\"pattern\": {\"pattern\": \"^([a-z0-9-]+|\\\\*)$\", \"error-message\": \"Use lower-case customer ids, or * for all\"}}, \"permissions\": {\"view\": [\"admin\"], \"edit\": [\"admin\"]}, \"multivalued\": true}], \"groups\": [{\"name\": \"user-metadata\", \"displayHeader\": \"User metadata\", \"displayDescription\": \"Attributes, which refer to user metadata\"}]}"
+          ]
+        }
+      }
+    ]
+  }
+}
