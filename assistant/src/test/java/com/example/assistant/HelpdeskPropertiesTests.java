@@ -23,6 +23,16 @@ class HelpdeskPropertiesTests {
     assertThat(p.retryAfterSeconds()).isEqualTo(5);
     assertThat(p.requestLog().enabled()).isTrue();
     assertThat(p.requestLog().connection()).isEqualTo("requestlog");
+    assertThat(p.requestLog().queueCapacity()).isEqualTo(1000);
+    assertThat(p.requestLog().writeThreads()).isEqualTo(4);
+  }
+
+  @Test
+  void keepsConfiguredRequestLogQueueSettings() {
+    var r = new HelpdeskProperties.RequestLog(true, "log", 50, 2);
+    assertThat(r.connection()).isEqualTo("log");
+    assertThat(r.queueCapacity()).isEqualTo(50);
+    assertThat(r.writeThreads()).isEqualTo(2);
   }
 
   @Test
@@ -32,7 +42,7 @@ class HelpdeskPropertiesTests {
             new HelpdeskProperties.Rag(5, 0.5),
             new HelpdeskProperties.Security("k"),
             new HelpdeskProperties.Kb(" "),
-            new HelpdeskProperties.RequestLog(false, " "),
+            new HelpdeskProperties.RequestLog(false, " ", 0, 0),
             200,
             2,
             300,

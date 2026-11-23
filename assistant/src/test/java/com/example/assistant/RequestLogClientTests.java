@@ -5,23 +5,42 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
 
 class RequestLogClientTests {
 
+  private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
+  private double writes(String outcome) {
+    return meters.counter(RequestLogClient.WRITES_METRIC, "outcome", outcome).count();
+  }
+
   private static HelpdeskProperties props(boolean enabled) {
     return new HelpdeskProperties(
-        null, null, null, new HelpdeskProperties.RequestLog(enabled, null), 0, 0, 0, null, null);
+        null,
+        null,
+        null,
+        new HelpdeskProperties.RequestLog(enabled, null, 0, 0),
+        0,
+        0,
+        0,
+        null,
+        null);
   }
 
   private static McpSyncClient client(String connection) {
@@ -46,11 +65,12 @@ class RequestLogClientTests {
     McpSyncClient requestLog = client("requestlog");
     when(requestLog.callTool(any()))
         .thenReturn(McpSchema.CallToolResult.builder().isError(false).build());
-    var log = new RequestLogClient(provider(List.of(tickets, requestLog)), props(true));
+    var log = new RequestLogClient(provider(List.of(tickets, requestLog)), props(true), meters);
     assertThat(log.enabled()).isTrue();
 
     log.record("req-1", "How?", null, "Like this.", null, 15);
     log.destroy(); // waits for the background write
+    assertThat(writes("stored")).isEqualTo(1);
 
     ArgumentCaptor<McpSchema.CallToolRequest> call =
         ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
@@ -69,7 +89,7 @@ class RequestLogClientTests {
   void failedRequestIsSentWithErrorStatus() {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
     log.record("req-2", "q", null, null, "RestClientException", 3);
     log.destroy();
 
@@ -79,31 +99,78 @@ class RequestLogClientTests {
     assertThat(call.getValue().arguments())
         .containsEntry("status", "ERROR")
         .containsEntry("errorType", "RestClientException");
+    assertThat(writes("failed")).isEqualTo(1);
   }
 
   @Test
   void serverFailureDoesNotPropagate() {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenThrow(new IllegalStateException("connection refused"));
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
     log.record("req-3", "q", null, "a", null, 1);
     log.destroy();
     verify(c).callTool(any());
+    assertThat(writes("failed")).isEqualTo(1);
+    assertThat(writes("stored")).isZero();
   }
 
   @Test
   void writesAfterShutdownAreDroppedQuietly() {
     McpSyncClient c = client("requestlog");
     ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-    var log = new RequestLogClient(c, executor);
+    var log = new RequestLogClient(c, executor, meters);
     log.destroy();
     log.record("req-4", "q", null, "a", null, 1);
     verify(c, never()).callTool(any());
+    assertThat(writes("dropped")).isEqualTo(1);
+  }
+
+  @Test
+  void fullQueueDropsWritesWithoutBlocking() throws Exception {
+    McpSyncClient c = client("requestlog");
+    CountDownLatch release = new CountDownLatch(1);
+    CountDownLatch started = new CountDownLatch(1);
+    when(c.callTool(any()))
+        .thenAnswer(
+            inv -> {
+              started.countDown();
+              release.await();
+              return McpSchema.CallToolResult.builder().isError(false).build();
+            });
+    // one writer thread, room for one waiting write
+    var log = new RequestLogClient(c, RequestLogClient.boundedExecutor(1, 1), meters);
+
+    log.record("busy", "q", null, "a", null, 1);
+    assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+    long start = System.nanoTime();
+    log.record("queued", "q", null, "a", null, 1);
+    for (int i = 0; i < 10; i++) {
+      log.record("overflow-" + i, "q", null, "a", null, 1);
+    }
+    assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(1));
+    assertThat(writes("dropped")).isEqualTo(10);
+
+    release.countDown();
+    log.destroy();
+    verify(c, times(2)).callTool(any());
+    assertThat(writes("stored")).isEqualTo(2);
+  }
+
+  @Test
+  void boundedExecutorUsesVirtualThreads() throws Exception {
+    var executor = RequestLogClient.boundedExecutor(2, 5);
+    try {
+      assertThat(executor.getMaximumPoolSize()).isEqualTo(2);
+      assertThat(executor.getQueue().remainingCapacity()).isEqualTo(5);
+      assertThat(executor.submit(() -> Thread.currentThread().isVirtual()).get()).isTrue();
+    } finally {
+      executor.close();
+    }
   }
 
   @Test
   void disabledLoggingDoesNothing() {
-    var log = new RequestLogClient(provider(List.of()), props(false));
+    var log = new RequestLogClient(provider(List.of()), props(false), meters);
     assertThat(log.enabled()).isFalse();
     log.record("req-5", "q", null, "a", null, 1);
     log.destroy();
@@ -112,7 +179,7 @@ class RequestLogClientTests {
   @Test
   void enabledWithoutConnectionFailsFast() {
     assertThatThrownBy(
-            () -> new RequestLogClient(provider(List.of(client("tickets"))), props(true)))
+            () -> new RequestLogClient(provider(List.of(client("tickets"))), props(true), meters))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("connections.requestlog.url");
   }
@@ -140,7 +207,7 @@ class RequestLogClientTests {
                 .isError(false)
                 .addContent(new McpSchema.TextContent(json))
                 .build());
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
 
     assertThat(log.recent(5, null))
         .containsExactly(
@@ -157,7 +224,7 @@ class RequestLogClientTests {
   void recentPassesTheCustomerFilter() {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(text("[]"));
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
 
     assertThat(log.recent(5, "acme")).isEmpty();
     ArgumentCaptor<McpSchema.CallToolRequest> call =
@@ -172,7 +239,7 @@ class RequestLogClientTests {
   void recordsTheCustomer() {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(false).build());
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
     log.record("req-6", "q", "globex", "a", null, 1);
     log.destroy();
 
@@ -193,7 +260,7 @@ class RequestLogClientTests {
                 """))
         .thenReturn(
             text("{\"id\":7,\"text\":\"Printer?\",\"createdAt\":\"2026-11-17T09:00:00Z\"}"));
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
 
     assertThat(log.questions())
         .containsExactly(new RequestLogClient.CatalogQuestion(1, "How do I reset my password?"));
@@ -212,7 +279,7 @@ class RequestLogClientTests {
   void questionsFailWhenServerErrors() {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
     assertThatThrownBy(log::questions).isInstanceOf(RequestLogUnavailableException.class);
     assertThatThrownBy(() -> log.addQuestion("q"))
         .isInstanceOf(RequestLogUnavailableException.class);
@@ -229,7 +296,7 @@ class RequestLogClientTests {
   void recentFailsWhenServerErrorsOrLoggingIsDisabled() {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
     assertThatThrownBy(() -> log.recent(5, null))
         .isInstanceOf(RequestLogUnavailableException.class);
 
@@ -237,7 +304,7 @@ class RequestLogClientTests {
     assertThatThrownBy(() -> log.recent(5, null))
         .isInstanceOf(RequestLogUnavailableException.class);
 
-    var disabled = new RequestLogClient(provider(List.of()), props(false));
+    var disabled = new RequestLogClient(provider(List.of()), props(false), meters);
     assertThatThrownBy(() -> disabled.recent(5, null))
         .isInstanceOf(RequestLogUnavailableException.class);
   }
@@ -249,7 +316,7 @@ class RequestLogClientTests {
         .thenReturn(error("text is longer than 1000 characters"))
         .thenReturn(error("Invalid customer"))
         .thenReturn(error("could not open JDBC connection"));
-    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
 
     assertThatThrownBy(() -> log.addQuestion("x"))
         .isInstanceOf(RequestLogRejectedException.class)
