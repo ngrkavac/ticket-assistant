@@ -259,8 +259,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 ### Stream A: Assistant & security
 - [x] **A1** (T0.1, assistant side) Add the `helpdesk.max-catalog-question-length` property (default 1000) and check it in `QuestionController`. Map request-log error results caused by validation to 400 instead of 503.
 - [x] **A2** (T0.5, T0.7) Make the queue wait and `Retry-After` configurable. Accept a valid incoming `X-Request-Id`.
-- [ ] **A3** (T0.6) Bounded request-log executor and the `helpdesk_requestlog_writes_total{outcome}` metric.
-- [ ] **A4** (T0.4) Caffeine cache for `listCustomers`.
+- [x] **A3** (T0.6) Bounded request-log executor and the `helpdesk_requestlog_writes_total{outcome}` metric.
+- [x] **A4** (T0.4) Caffeine cache for `listCustomers`.
 - [ ] **A5** (T1.1) Spring Security resource server: deny by default, security headers. The API key remains only in the `local` profile.
 - [ ] **A6** (T1.2) Map the JWT to a principal (roles, allowed customers) per K1.
 - [ ] **A7** (T1.3) Endpoint authorization per K3.
@@ -281,8 +281,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 ### Stream B: MCP servers & data
 - [x] **B1** (T2.2) Remove the H2 default from the request-log server; add `local` and `prod` profiles.
 - [x] **B2** (T2.5) Testcontainers Postgres tests for the request-log repositories.
-- [ ] **B3** (T1.5, T1.6, server side) Migration `V3__user_subject_and_tool_calls.sql`, plus the `logRequest`/`getRequest` changes and tests per K4.
-- [ ] **B4** (T2.3) Separate Flyway (DDL) and app (DML) database users for the request log.
+- [x] **B3** (T1.5, T1.6, server side) Migration `V3__user_subject_and_tool_calls.sql`, plus the `logRequest`/`getRequest` changes and tests per K4.
+- [x] **B4** (T2.3) Separate Flyway (DDL) and app (DML) database users for the request log.
 - [ ] **B5** (T2.4) Retention purge job with ShedLock and the `requestlog_purged_rows_total` metric.
 - [ ] **B6** (T2.6) Hikari and statement timeouts for the request log.
 - [ ] **B7** **[L]** (T2.1) Postgres-backed `TicketTools`: Flyway schema, sequence-based ids, demo seed only in `local`. Add Testcontainers tests; the contract tests must still pass. ⛓ C8 for compose (until then, use Testcontainers).
@@ -296,8 +296,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 ### Stream C: Platform & UI
 - [x] **C1** (T0.2) Fix the jar glob in the `Dockerfile` so release versions build.
 - [x] **C2** (T0.3) Show answers in the UI (per-question result list).
-- [ ] **C3** (T6.1) ESLint, Vitest and Testing Library; tests for the answer display and error states; a `ui` CI job.
-- [ ] **C4** (T6.3) CI hardening:
+- [x] **C3** (T6.1) ESLint, Vitest and Testing Library; tests for the answer display and error states; a `ui` CI job.
+- [x] **C4** (T6.3) CI hardening:
   - `permissions: contents: read`, actions pinned by SHA, `renovate.json`.
   - Run CI once per commit: `on: {push: {branches: [main]}, pull_request: {}}`. Every push to a PR branch currently runs CI twice, which doubles the downloads from Maven Central.
   - Make Maven downloads in the `Dockerfile` resilient: a BuildKit cache mount (`RUN --mount=type=cache,target=/root/.m2 ...`) on the `dependency:go-offline` and `package` steps, and Maven HTTP retries (`-Dmaven.resolver.transport=wagon -Dmaven.wagon.http.retryHandler.count=5`, or the equivalent resolver setting in `.mvn/maven.config`). This fixes the flaky `contract (java)` image build seen in CI run 44553395898, where Central briefly failed to serve existing artifacts.
