@@ -1,41 +1,42 @@
-# Stream a handoff – 2026-11-19
+# Stream a handoff – 2026-11-23
 ## Done this session
-- A1 – `prod/a1-catalog-length` (base `main`)
-- A2 – `prod/a2-queue-wait-request-id` (base `prod/a1-catalog-length`, stacked)
+- A3 – `prod/a3-requestlog-executor` (base `main`)
+- A4 – `prod/a4-customers-cache` (base `prod/a3-requestlog-executor`, stacked)
 
 ## Ready to push
-### `prod/a1-catalog-length` (base: `main`)
-**PR title:** Limit catalog questions separately and map request-log validation errors to 400 (A1)
+### `prod/a3-requestlog-executor` (base: `main`)
+**PR title:** Bound the request-log write executor and add helpdesk_requestlog_writes_total (A3)
 
 **PR body:**
-Stream A, task A1 (T0.1, assistant side).
+Stream A, task A3 (T0.6).
 
-- New property `helpdesk.max-catalog-question-length` (default 1000, at most 1000 = the request-log server's limit). `POST /questions` checks it instead of the `/ask` limit (`helpdesk.max-question-length`), so the two limits are independent. A 1001-character catalog question gets 400 with the detail "Question exceeds the maximum length of 1000 characters".
-- `RequestLogClient` now tells validation errors from outages: an `isError` result whose text looks like an `IllegalArgumentException` message from the request-log server ("invalid", "is required", "is longer than", "must be") raises the new `RequestLogRejectedException`, mapped to 400 with a generic detail. Other errors stay 503. This also turns an invalid `customer` filter on `/requests` into 400.
-- Tests: `QuestionControllerTests`, `RequestLogClientTests`, `HelpdeskPropertiesTests`.
+- `RequestLogClient` writes `logRequest` on a `ThreadPoolExecutor` with a virtual-thread factory, a bounded `ArrayBlockingQueue` and `AbortPolicy`, instead of an unbounded virtual-thread-per-task executor. When the queue is full (or the app is shutting down), `record()` catches the rejection, drops the write and logs a WARN; `/ask` is never blocked.
+- New counter `helpdesk.requestlog.writes{outcome=stored|failed|dropped}`, exported to Prometheus as `helpdesk_requestlog_writes_total{outcome}` (K9).
+- New properties: `helpdesk.request-log.write-threads` (env `REQUEST_LOG_WRITE_THREADS`, default 4, max 256) and `helpdesk.request-log.queue-capacity` (env `REQUEST_LOG_QUEUE_CAPACITY`, default 1000, max 100000).
+- Tests: `RequestLogClientTests` (overflow increments `dropped` and `record()` returns immediately while the writer is blocked; stored/failed counts; the executor uses virtual threads), `HelpdeskPropertiesTests`.
 
 `./mvnw -pl assistant -am verify` passes.
 
-README needs: document `helpdesk.max-catalog-question-length` next to `helpdesk.max-question-length`.
+README needs: document `REQUEST_LOG_WRITE_THREADS`, `REQUEST_LOG_QUEUE_CAPACITY` and the `helpdesk_requestlog_writes_total{outcome}` metric (a rising `dropped` count means the request-log server is too slow or down).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
-### `prod/a2-queue-wait-request-id` (base: `prod/a1-catalog-length`)
-Stacked on A1 because both add components to the `HelpdeskProperties` record and touch the same constructor calls in tests; branching from `main` would conflict. Merge A1 first, then retarget this PR to `main`.
+### `prod/a4-customers-cache` (base: `prod/a3-requestlog-executor`)
+Stacked on A3 because both change `HelpdeskProperties`, `HelpdeskPropertiesTests`, `RequestLogClientTests` and `application.properties`; branching from `main` would conflict. Merge A3 first, then retarget this PR to `main`.
 
-**PR title:** Make the queue wait and Retry-After configurable and accept X-Request-Id (A2)
+**PR title:** Cache the customer list from the ticket server with Caffeine (A4)
 
 **PR body:**
-Stream A, task A2 (T0.5, T0.7). Depends on #<A1 PR> (stacked on `prod/a1-catalog-length`; retarget to `main` once A1 is merged).
+Stream A, task A4 (T0.4). Depends on #<A3 PR> (stacked on `prod/a3-requestlog-executor`; retarget to `main` once A3 is merged).
 
-- `helpdesk.queue-wait` (env `HELPDESK_QUEUE_WAIT`, default `1s`): how long `/ask` waits for a free slot before 429. `0s` rejects immediately; negative values fail at startup.
-- `helpdesk.retry-after` (env `HELPDESK_RETRY_AFTER`, default `5s`): the `Retry-After` header on 429, in whole seconds rounded up; must be positive.
-- `RequestIdFilter` keeps an incoming `X-Request-Id` that matches `[A-Za-z0-9._:-]{1,64}` (the same rule as `RequestLogTools.requireRequestId`) and echoes it in the response and logs; anything else is replaced by a random UUID.
-- Tests: `AssistantServiceTests`, `AssistantControllerTests`, `HelpdeskPropertiesTests`.
+- `TicketDirectoryClient` caches the `listCustomers` result in a Caffeine cache for `helpdesk.customers-cache-ttl` (env `HELPDESK_CUSTOMERS_CACHE_TTL`, default `60s`; `0s` disables the cache; negative values fail at startup). `/customers` and the `/ask` customer check share the cache, so the ticket server gets at most one `listCustomers` call per TTL.
+- An unknown customer invalidates the cache and reloads the list once before the request is rejected, so a newly added customer works without waiting for the TTL. Failed loads are never cached.
+- Uses `com.github.ben-manes.caffeine:caffeine` directly (version from the Spring Boot BOM) rather than `spring-boot-starter-cache`/`@Cacheable`: there is a single cache entry and `requireKnown` calls `customers()` on the same bean, which a proxy-based `@Cacheable` would not intercept.
+- Tests: `TicketDirectoryClientTests` (one MCP call per TTL with a fake ticker, reload on unknown customer, failures not cached, TTL 0), `HelpdeskPropertiesTests`.
 
 `./mvnw -pl assistant -am verify` passes.
 
-README needs: document `HELPDESK_QUEUE_WAIT`, `HELPDESK_RETRY_AFTER`, and that a valid incoming `X-Request-Id` is propagated (useful for the ingress / nginx `$request_id`). Needs from stream C (optional): nginx could forward `X-Request-Id $request_id` to the assistant.
+README needs: document `HELPDESK_CUSTOMERS_CACHE_TTL`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -43,13 +44,14 @@ README needs: document `HELPDESK_QUEUE_WAIT`, `HELPDESK_RETRY_AFTER`, and that a
 none
 
 ## Next task
-A3 – dependencies satisfied: yes
+A5 – dependencies satisfied: yes
 
 ## Blocked on
 nothing
 
 ## Notes for the next session
-- `HelpdeskProperties` is a record; every new component means updating the constructor calls in `AssistantServiceTests`, `KnowledgeBaseIndexerTests`, `RequestLogClientTests` and `HelpdeskPropertiesTests`. If A1/A2 are not merged yet when you start A3, branch from `prod/a2-queue-wait-request-id` (A3 touches `RequestLogClient`, also changed in A1) and say so in the PR text.
+- If A3/A4 are not merged when you start A5, branch from `prod/a4-customers-cache` only if A5 touches the same files (`HelpdeskProperties`, `application.properties`, tests constructing `HelpdeskProperties`); otherwise branch from `main`.
+- `HelpdeskProperties` now has 10 components (last one `Duration customersCacheTtl`); `RequestLog` has 4 (`enabled, connection, queueCapacity, writeThreads`). Every new component means updating the `new HelpdeskProperties(...)` calls in `AssistantServiceTests`, `KnowledgeBaseIndexerTests`, `RequestLogClientTests` and `HelpdeskPropertiesTests` (a small Python paren-matching script that appends `, null` to every call worked well).
+- `RequestLogClient` now needs a `MeterRegistry` (Spring Boot provides one; tests use `SimpleMeterRegistry`). `TicketDirectoryClient` now needs `HelpdeskProperties`; tests use the package-private `(McpSyncClient, Duration, Ticker)` constructor.
 - Run `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant` before `./mvnw -pl assistant -am verify`.
 - The worktree sandbox rejects complex compound shell commands that include `git` or `cd ..`; keep git commands simple and run from the worktree root.
-- `TooManyRequestsException` now carries its `Duration retryAfter`; the no-arg constructor defaults to 5s.
