@@ -10,7 +10,7 @@ class HelpdeskPropertiesTests {
 
   @Test
   void appliesDefaultsWhenNothingIsConfigured() {
-    var p = new HelpdeskProperties(null, null, null, null, 0, 0, 0, null, null);
+    var p = new HelpdeskProperties(null, null, null, null, 0, 0, 0, null, null, null);
     assertThat(p.rag().topK()).isEqualTo(3);
     assertThat(p.rag().similarityThreshold()).isEqualTo(0.3);
     assertThat(p.security().apiKey()).isNull();
@@ -21,6 +21,7 @@ class HelpdeskPropertiesTests {
     assertThat(p.queueWait()).isEqualTo(Duration.ofSeconds(1));
     assertThat(p.retryAfter()).isEqualTo(Duration.ofSeconds(5));
     assertThat(p.retryAfterSeconds()).isEqualTo(5);
+    assertThat(p.customersCacheTtl()).isEqualTo(Duration.ofSeconds(60));
     assertThat(p.requestLog().enabled()).isTrue();
     assertThat(p.requestLog().connection()).isEqualTo("requestlog");
     assertThat(p.requestLog().queueCapacity()).isEqualTo(1000);
@@ -47,7 +48,8 @@ class HelpdeskPropertiesTests {
             2,
             300,
             Duration.ofMillis(250),
-            Duration.ofMillis(1500));
+            Duration.ofMillis(1500),
+            Duration.ZERO);
     assertThat(p.rag().topK()).isEqualTo(5);
     assertThat(p.security().apiKey()).isEqualTo("k");
     assertThat(p.kb().location()).isEqualTo("classpath:kb/*.md");
@@ -56,6 +58,7 @@ class HelpdeskPropertiesTests {
     assertThat(p.maxCatalogQuestionLength()).isEqualTo(300);
     assertThat(p.queueWait()).isEqualTo(Duration.ofMillis(250));
     assertThat(p.retryAfterSeconds()).isEqualTo(2); // 1.5s rounded up
+    assertThat(p.customersCacheTtl()).isZero();
     assertThat(p.requestLog().enabled()).isFalse();
     assertThat(p.requestLog().connection()).isEqualTo("requestlog");
   }
@@ -69,9 +72,15 @@ class HelpdeskPropertiesTests {
     assertThatThrownBy(() -> props(null, Duration.ZERO))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("retry-after");
+    assertThatThrownBy(
+            () ->
+                new HelpdeskProperties(
+                    null, null, null, null, 0, 0, 0, null, null, Duration.ofSeconds(-1)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("customers-cache-ttl");
   }
 
   private static HelpdeskProperties props(Duration queueWait, Duration retryAfter) {
-    return new HelpdeskProperties(null, null, null, null, 0, 0, 0, queueWait, retryAfter);
+    return new HelpdeskProperties(null, null, null, null, 0, 0, 0, queueWait, retryAfter, null);
   }
 }

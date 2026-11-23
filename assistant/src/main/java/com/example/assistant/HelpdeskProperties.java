@@ -18,7 +18,8 @@ public record HelpdeskProperties(
     @Min(0) @Max(1000) int maxConcurrentRequests,
     @Min(0) @Max(MAX_CATALOG_QUESTION_LENGTH) int maxCatalogQuestionLength,
     Duration queueWait,
-    Duration retryAfter) {
+    Duration retryAfter,
+    Duration customersCacheTtl) {
 
   /** The longest catalog question the request-log server stores. */
   static final int MAX_CATALOG_QUESTION_LENGTH = 1000;
@@ -42,6 +43,10 @@ public record HelpdeskProperties(
     retryAfter = retryAfter == null ? Duration.ofSeconds(5) : retryAfter;
     if (retryAfter.isNegative() || retryAfter.isZero()) {
       throw new IllegalArgumentException("helpdesk.retry-after must be positive");
+    }
+    customersCacheTtl = customersCacheTtl == null ? Duration.ofSeconds(60) : customersCacheTtl;
+    if (customersCacheTtl.isNegative()) {
+      throw new IllegalArgumentException("helpdesk.customers-cache-ttl must not be negative");
     }
   }
 

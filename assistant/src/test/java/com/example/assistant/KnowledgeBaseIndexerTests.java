@@ -25,7 +25,7 @@ class KnowledgeBaseIndexerTests {
   private KnowledgeBaseIndexer indexer(String location) {
     var props =
         new HelpdeskProperties(
-            null, null, new HelpdeskProperties.Kb(location), null, 0, 0, 0, null, null);
+            null, null, new HelpdeskProperties.Kb(location), null, 0, 0, 0, null, null, null);
     return new KnowledgeBaseIndexer(store, new PathMatchingResourcePatternResolver(), props);
   }
 
