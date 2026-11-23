@@ -14,6 +14,8 @@ class HelpdeskPropertiesTests {
     assertThat(p.rag().topK()).isEqualTo(3);
     assertThat(p.rag().similarityThreshold()).isEqualTo(0.3);
     assertThat(p.security().apiKey()).isNull();
+    assertThat(p.security().rolesClaim()).isEqualTo("roles");
+    assertThat(p.security().customersClaim()).isEqualTo("customers");
     assertThat(p.kb().location()).isEqualTo("classpath:kb/*.md");
     assertThat(p.maxQuestionLength()).isEqualTo(1000);
     assertThat(p.maxConcurrentRequests()).isEqualTo(8);
@@ -41,7 +43,7 @@ class HelpdeskPropertiesTests {
     var p =
         new HelpdeskProperties(
             new HelpdeskProperties.Rag(5, 0.5),
-            new HelpdeskProperties.Security("k"),
+            new HelpdeskProperties.Security("k", " realm_access.roles ", "tenants"),
             new HelpdeskProperties.Kb(" "),
             new HelpdeskProperties.RequestLog(false, " ", 0, 0),
             200,
@@ -52,6 +54,8 @@ class HelpdeskPropertiesTests {
             Duration.ZERO);
     assertThat(p.rag().topK()).isEqualTo(5);
     assertThat(p.security().apiKey()).isEqualTo("k");
+    assertThat(p.security().rolesClaim()).isEqualTo("realm_access.roles");
+    assertThat(p.security().customersClaim()).isEqualTo("tenants");
     assertThat(p.kb().location()).isEqualTo("classpath:kb/*.md");
     assertThat(p.maxQuestionLength()).isEqualTo(200);
     assertThat(p.maxConcurrentRequests()).isEqualTo(2);

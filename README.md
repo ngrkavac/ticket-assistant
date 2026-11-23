@@ -140,4 +140,31 @@ open http://localhost:5173   # web UI
 
 `COMPOSE_PROFILES` picks the ticket server: `java`, `python` or `rust`. Exactly one must be active, because the assistant needs a ticket server at startup. Put `COMPOSE_PROFILES=java` in `.env` to make it the default, and override it per run with `COMPOSE_PROFILES=rust docker compose up --build`. Each implementation answers to the network alias `ticket-mcp-server`. To switch a running stack, run `docker compose down` first so the old server stops.
 
+### Local sign-in (Keycloak)
+
+Compose also starts Keycloak 26 in dev mode at http://localhost:8180 (loopback only), with the realm `helpdesk` from `deploy/keycloak/realm-helpdesk.json`. **Everything in it is for local development only**: the users, their password and the default secrets below are public. Never import this realm into a shared or production Keycloak.
+
+| User | Roles | `customers` claim |
+|---|---|---|
+| `acme-agent` | `helpdesk-agent` | `acme` |
+| `globex-agent` | `helpdesk-agent` | `globex` |
+| `acme-writer` | `helpdesk-agent`, `tickets-write` | `acme` |
+| `admin` | `helpdesk-agent`, `helpdesk-admin`, `tickets-write` | `*` (all customers) |
+
+All four use the password `local-only-password`. Access tokens have `aud=helpdesk-assistant` and the claims `roles`, `customers`, `sub` and `preferred_username`. The issuer is always `http://localhost:8180/realms/helpdesk`, also when another container calls `http://keycloak:8080`; discovery then returns `http://keycloak:8080/...` for the JWKS and token endpoints.
+
+- Clients: `helpdesk-ui` (confidential, authorization code + PKCE, for oauth2-proxy; secret `HELPDESK_UI_CLIENT_SECRET`, default `local-only-client-secret`), `helpdesk-dev-cli` (public, password grant, for curl and tests only) and `helpdesk-assistant` (the audience; no login).
+- Admin console: http://localhost:8180/admin, user `admin`, password `KEYCLOAK_ADMIN_PASSWORD` (default `local-only-admin`). This `admin` is in the `master` realm and is not the `admin` demo user above.
+- The realm is imported when the container is created; it is skipped if the realm already exists. After editing the JSON, recreate the container: `docker compose up -d --force-recreate keycloak`.
+
+Get a token for a demo user:
+
+```bash
+curl -s localhost:8180/realms/helpdesk/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=helpdesk-dev-cli \
+  -d username=acme-agent -d password=local-only-password | jq -r .access_token
+```
+
+The assistant does not check these tokens yet (it still uses `HELPDESK_API_KEY`); the token check and the sign-in through oauth2-proxy are being added.
+
 Known limits (deliberate for a demo): in-memory vector store re-indexed on each start, demo tickets in memory, no retention/purge for the request log (questions are kept indefinitely: add a cleanup job if they may contain personal data), no rate limiting or TLS (put a gateway/ingress in front), Docker setup not built or run here.

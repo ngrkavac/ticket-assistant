@@ -10,6 +10,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.web.firewall.RequestRejectedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientException;
@@ -24,6 +25,12 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(QuestionTooLongException.class)
   ProblemDetail tooLong(QuestionTooLongException e) {
     return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+  }
+
+  /** The security firewall rejects a header (e.g. a control character) when MVC first reads it. */
+  @ExceptionHandler(RequestRejectedException.class)
+  ProblemDetail rejected(RequestRejectedException e) {
+    return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Malformed request.");
   }
 
   @ExceptionHandler(UnknownCustomerException.class)

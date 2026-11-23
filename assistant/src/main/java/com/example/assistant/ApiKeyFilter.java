@@ -7,51 +7,62 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.List;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Requires header X-API-Key on the UI/API endpoints (/ask, /requests, /customers, /questions) when
- * helpdesk.security.api-key is configured.
+ * Authentication for the {@code local} profile only (dev and demos without an identity provider).
+ * With {@code helpdesk.security.api-key} set, a request carrying that key in the {@code X-API-Key}
+ * header is authenticated as the local user; without it, the request stays anonymous and the
+ * security chain answers 401. With a blank key every request is authenticated as the local user.
+ *
+ * <p>The local user ({@link HelpdeskPrincipal#LOCAL}) has every role and every customer. It is
+ * registered only in the {@code local} security chain (see {@link SecurityConfig}), never as a
+ * servlet filter of its own.
  */
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 10)
 class ApiKeyFilter extends OncePerRequestFilter {
+
+  static final String HEADER = "X-API-Key";
+
+  static final String LOCAL_USER = "local";
 
   private final byte[] expected;
 
-  ApiKeyFilter(HelpdeskProperties props) {
-    String key = props.security().apiKey();
-    this.expected = StringUtils.hasText(key) ? key.getBytes(StandardCharsets.UTF_8) : null;
+  ApiKeyFilter(String apiKey) {
+    this.expected = StringUtils.hasText(apiKey) ? apiKey.getBytes(StandardCharsets.UTF_8) : null;
   }
 
-  private static final List<String> PROTECTED =
-      List.of("/ask", "/requests", "/customers", "/questions");
-
-  @Override
-  protected boolean shouldNotFilter(HttpServletRequest request) {
-    String uri = request.getRequestURI();
-    return expected == null || PROTECTED.stream().noneMatch(uri::startsWith);
+  /** Whether a key is required; false means every request is let in as the local user. */
+  boolean keyRequired() {
+    return expected != null;
   }
 
   @Override
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
-    String provided = request.getHeader("X-API-Key");
-    boolean ok =
-        provided != null
-            && MessageDigest.isEqual(expected, provided.getBytes(StandardCharsets.UTF_8));
-    if (!ok) {
-      response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-      response.setContentType("application/problem+json");
-      response.getWriter().write("{\"status\":401,\"title\":\"Unauthorized\"}");
-      return;
+    if (!keyRequired() || matches(request.getHeader(HEADER))) {
+      var context = SecurityContextHolder.createEmptyContext();
+      context.setAuthentication(localUser());
+      SecurityContextHolder.setContext(context);
     }
     chain.doFilter(request, response);
+  }
+
+  private boolean matches(String provided) {
+    return provided != null
+        && MessageDigest.isEqual(expected, provided.getBytes(StandardCharsets.UTF_8));
+  }
+
+  static Authentication localUser() {
+    return UsernamePasswordAuthenticationToken.authenticated(
+        HelpdeskPrincipal.LOCAL,
+        null,
+        AuthorityUtils.createAuthorityList(
+            HelpdeskPrincipal.LOCAL.roles().stream().sorted().toList()));
   }
 }
