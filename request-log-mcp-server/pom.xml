@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>com.example</groupId>
 		<artifactId>helpdesk-assistant</artifactId>
-		<version>0.0.1-SNAPSHOT</version>
+		<version>${revision}</version>
 	</parent>
 	<artifactId>request-log-mcp-server</artifactId>
 

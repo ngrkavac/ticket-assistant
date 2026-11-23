@@ -11,11 +11,9 @@
 
 	<groupId>com.example</groupId>
 	<artifactId>helpdesk-assistant</artifactId>
-	<!-- To become ${revision} (CI-friendly version, set with -Drevision=1.2.3 from release tags,
-	     T6.7) in one commit together with <parent><version> of the three modules: Maven cannot
-	     resolve a mix of a literal and a ${revision} parent version. The revision property and
-	     the flatten-maven-plugin below are already in place for that switch. -->
-	<version>0.0.1-SNAPSHOT</version>
+	<!-- CI-friendly version (T6.7): set with -Drevision=1.2.3, e.g. from a release tag. The
+	     flatten-maven-plugin below resolves it in installed and deployed poms. -->
+	<version>${revision}</version>
 	<packaging>pom</packaging>
 	<name>helpdesk-assistant</name>
 
@@ -26,7 +24,7 @@
 	</modules>
 
 	<properties>
-		<!-- Default version for local builds; keep equal to <version> above until the switch. -->
+		<!-- Default version for local builds; override with -Drevision=... -->
 		<revision>0.0.1-SNAPSHOT</revision>
 		<java.version>21</java.version>
 		<spring-ai.version>1.1.8</spring-ai.version>
