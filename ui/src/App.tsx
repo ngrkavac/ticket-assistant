@@ -15,6 +15,7 @@ const LOG_WRITE_DELAY_MS = 500;
 const HISTORY_SIZE = 5;
 
 type Message = { text: string; error?: boolean };
+type History = { customer: string; rows: LoggedRequest[]; error: string | null };
 
 export default function App() {
   const [customers, setCustomers] = useState<string[]>([]);
@@ -23,8 +24,8 @@ export default function App() {
   const [questions, setQuestions] = useState<CatalogQuestion[]>([]);
   const [questionsError, setQuestionsError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [entries, setEntries] = useState<LoggedRequest[]>([]);
-  const [historyError, setHistoryError] = useState<string | null>(null);
+  // Tagged with the customer it belongs to, so switching customers hides it without an extra reset.
+  const [history, setHistory] = useState<History | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const [showHistory, setShowHistory] = useState(true);
@@ -33,21 +34,27 @@ export default function App() {
   const [resultsCustomer, setResultsCustomer] = useState<string | null>(null);
   // Ignore history responses for a customer that is no longer selected.
   const customerRef = useRef<string | null>(null);
-  customerRef.current = customer;
+  useEffect(() => {
+    customerRef.current = customer;
+  }, [customer]);
 
-  const refresh = useCallback(async (forCustomer: string) => {
-    try {
-      const rows = await listRequests(forCustomer, HISTORY_SIZE);
-      if (customerRef.current === forCustomer) {
-        setEntries(rows);
-        setHistoryError(null);
-      }
-    } catch (e) {
-      if (customerRef.current === forCustomer) {
-        setHistoryError((e as Error).message);
-      }
-    }
+  const refresh = useCallback((forCustomer: string) => {
+    listRequests(forCustomer, HISTORY_SIZE).then(
+      (rows) => {
+        if (customerRef.current === forCustomer) {
+          setHistory({ customer: forCustomer, rows, error: null });
+        }
+      },
+      (e) => {
+        if (customerRef.current === forCustomer) {
+          const error = (e as Error).message;
+          // Keep the rows already shown for this customer next to the error.
+          setHistory((prev) => ({ customer: forCustomer, rows: prev?.customer === forCustomer ? prev.rows : [], error }));
+        }
+      },
+    );
   }, []);
+  const current = history?.customer === customer ? history : null;
 
   useEffect(() => {
     listCustomers()
@@ -62,9 +69,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setEntries([]);
     if (customer) {
-      void refresh(customer);
+      refresh(customer);
     }
   }, [customer, refresh]);
 
@@ -110,7 +116,7 @@ export default function App() {
         lastError = (e as Error).message;
         update(i, { state: 'failed', error: lastError });
       }
-      setTimeout(() => void refresh(customer), LOG_WRITE_DELAY_MS);
+      setTimeout(() => refresh(customer), LOG_WRITE_DELAY_MS);
     }
     const done = batch.length - failed;
     setMessage(
@@ -158,7 +164,12 @@ export default function App() {
               <NewQuestionForm disabled={busy} onAdded={handleAdded} />
               <Switch id="show-history" label="Show history" checked={showHistory} onChange={setShowHistory} />
               {showHistory && (
-                <HistoryTable customer={customer} limit={HISTORY_SIZE} entries={entries} error={historyError} />
+                <HistoryTable
+                  customer={customer}
+                  limit={HISTORY_SIZE}
+                  entries={current?.rows ?? []}
+                  error={current?.error ?? null}
+                />
               )}
             </section>
           </div>

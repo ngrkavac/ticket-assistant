@@ -9,6 +9,18 @@ jobs:
         with: {distribution: temurin, java-version: 21, cache: maven}
       - run: ./mvnw -B verify
 
+  ui:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: ui}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm, cache-dependency-path: ui/package-lock.json}
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
   python:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: ticket-mcp-server-python}}

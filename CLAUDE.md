@@ -11,7 +11,7 @@ Helpdesk assistant ("Resolva"). It has these modules:
 
 Build and test:
 - Java: `./mvnw verify`. This runs the tests, the 80% JaCoCo line-coverage gate and the google-java-format check. Fix formatting with `./mvnw com.spotify.fmt:fmt-maven-plugin:format`.
-- UI: `cd ui && npm run lint && npm test && npm run build` (lint and test exist once task C3 is done; until then `npm run build`).
+- UI: `cd ui && npm run lint && npm test && npm run build`.
 - Python: `cd ticket-mcp-server-python && uv run ruff check . && uv run ruff format --check . && uv run pytest`.
 - Rust: `cd ticket-mcp-server-rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
 - Contract: start a ticket server on :8081, then `cd ticket-mcp-contract-tests && TICKETS_MCP_URL=http://localhost:8081 uv run pytest`.
