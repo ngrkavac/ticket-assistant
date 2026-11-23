@@ -4,9 +4,15 @@ import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,7 +23,14 @@ import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimNames;
+import org.springframework.security.oauth2.jwt.JwtClaimValidator;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
@@ -26,6 +39,7 @@ import org.springframework.security.web.authentication.AnonymousAuthenticationFi
 import org.springframework.security.web.firewall.HttpStatusRequestRejectedHandler;
 import org.springframework.security.web.firewall.RequestRejectedHandler;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy;
+import org.springframework.util.StringUtils;
 import org.springframework.web.context.support.WebApplicationContextUtils;
 
 /**
@@ -35,8 +49,9 @@ import org.springframework.web.context.support.WebApplicationContextUtils;
  *
  * <p>Outside the {@code local} profile the caller is an OIDC user: the assistant is an OAuth2
  * resource server that validates the bearer JWT against {@code OIDC_ISSUER_URI} and {@code
- * OIDC_AUDIENCE} (K1/K2), and refuses to start without an issuer. In the {@code local} profile the
- * optional {@code X-API-Key} check is used instead (see {@link ApiKeyFilter}).
+ * OIDC_AUDIENCE} (K1/K2), and refuses to start without an issuer. Signing keys come from the
+ * issuer's discovery document, or from {@code OIDC_JWK_SET_URI} when that is set. In the {@code
+ * local} profile the optional {@code X-API-Key} check is used instead (see {@link ApiKeyFilter}).
  */
 @Configuration
 @EnableWebSecurity
@@ -94,6 +109,48 @@ class SecurityConfig {
     api(http, entryPoint)
         .oauth2ResourceServer(o -> o.jwt(jwt -> {}).authenticationEntryPoint(entryPoint));
     return http.build();
+  }
+
+  /**
+   * Used instead of Boot's issuer-discovery decoder when {@code OIDC_JWK_SET_URI} is set, e.g. when
+   * the assistant reaches the identity provider under another host name than the token's issuer
+   * (Keycloak in compose: issuer {@code http://localhost:8180/...}, keys at {@code
+   * http://keycloak:8080/...}). Tokens are still checked against {@code OIDC_ISSUER_URI} and {@code
+   * OIDC_AUDIENCE}. The keys are fetched on first use, so startup does not need the provider.
+   */
+  @Bean
+  @Profile("!local")
+  @ConditionalOnExpression("!'${helpdesk.security.jwk-set-uri:}'.isBlank()")
+  JwtDecoder jwkSetUriJwtDecoder(
+      @Value("${helpdesk.security.jwk-set-uri}") String jwkSetUri,
+      @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:}") String issuer,
+      @Value("${spring.security.oauth2.resourceserver.jwt.audiences:}") String audiences) {
+    if (!StringUtils.hasText(issuer)) {
+      throw new IllegalStateException(
+          "OIDC_JWK_SET_URI is set but OIDC_ISSUER_URI is not: the issuer is needed to validate"
+              + " tokens");
+    }
+    NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri.trim()).build();
+    decoder.setJwtValidator(
+        jwtValidator(issuer.trim(), StringUtils.commaDelimitedListToSet(audiences)));
+    return decoder;
+  }
+
+  /** Expiry, issuer and (when configured) audience: the same checks Boot applies. */
+  static OAuth2TokenValidator<Jwt> jwtValidator(String issuer, Set<String> audiences) {
+    List<OAuth2TokenValidator<Jwt>> validators = new ArrayList<>();
+    validators.add(JwtValidators.createDefaultWithIssuer(issuer));
+    Set<String> expected =
+        audiences.stream()
+            .map(String::trim)
+            .filter(StringUtils::hasText)
+            .collect(Collectors.toSet());
+    if (!expected.isEmpty()) {
+      validators.add(
+          new JwtClaimValidator<List<String>>(
+              JwtClaimNames.AUD, aud -> aud != null && aud.stream().anyMatch(expected::contains)));
+    }
+    return new DelegatingOAuth2TokenValidator<>(validators);
   }
 
   /** Fail fast instead of starting an API that nobody can call (or a confusing bean error). */
