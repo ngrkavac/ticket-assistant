@@ -3,6 +3,10 @@ FROM eclipse-temurin:21-jdk AS build
 WORKDIR /src
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
+# The wrapper's download of Maven itself has no retry (.mvn/maven.config only applies once Maven
+# runs), so retry it here. It lands in its own layer, which CI restores from the layer cache.
+RUN for i in 1 2 3 4 5; do ./mvnw -q -B -v && exit 0; \
+      echo "Maven wrapper download failed (attempt $i), retrying" >&2; sleep $((i * 5)); done; exit 1
 COPY ticket-mcp-server-java/pom.xml ticket-mcp-server-java/
 COPY request-log-mcp-server/pom.xml request-log-mcp-server/
 COPY assistant/pom.xml assistant/
