@@ -108,6 +108,9 @@ services:
       OLLAMA_URL: http://ollama:11434
       TICKETS_MCP_URL: http://ticket-mcp-server:8081
       REQUEST_LOG_MCP_URL: http://request-log-mcp-server:8082
+      # Since A5 the assistant needs OIDC_ISSUER_URI outside the `local` profile. Until C7 puts
+      # oauth2-proxy in front of the UI, compose keeps the API-key flow via the `local` profile.
+      SPRING_PROFILES_ACTIVE: local
       HELPDESK_API_KEY: ${HELPDESK_API_KEY:?set HELPDESK_API_KEY}
     volumes: [models:/models]   # caches the embedding model between restarts
     ports: ["8080:8080"]   # management port 9090 is intentionally not published
