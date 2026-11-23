@@ -3,7 +3,9 @@ package com.example.requestlog;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.zaxxer.hikari.HikariDataSource;
 import java.util.UUID;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,7 +22,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 /**
  * The {@code prod} profile against real PostgreSQL (Testcontainers, needs Docker) with separate
  * users: Flyway migrates as {@code requestlog_migrator}, the application runs as {@code
- * requestlog_app}, which may only read and write rows.
+ * requestlog_app}, which may only read and write rows. Also checks the pool size and the statement
+ * timeout on real PostgreSQL.
  */
 @SpringBootTest
 @ActiveProfiles("prod")
@@ -38,6 +41,25 @@ class LeastPrivilegeTests {
     registry.add("REQUEST_LOG_DB_PASSWORD", () -> "app-secret");
     registry.add("REQUEST_LOG_DB_MIGRATION_USER", () -> "requestlog_migrator");
     registry.add("REQUEST_LOG_DB_MIGRATION_PASSWORD", () -> "migrator-secret");
+    registry.add("REQUEST_LOG_DB_POOL_SIZE", () -> "3");
+    registry.add("REQUEST_LOG_DB_STATEMENT_TIMEOUT", () -> "1s");
+  }
+
+  @Autowired DataSource dataSource;
+
+  @Test
+  void poolHasTheConfiguredSizeAndFailsFast() {
+    var pool = (HikariDataSource) dataSource;
+    assertThat(pool.getMaximumPoolSize()).isEqualTo(3);
+    assertThat(pool.getConnectionTimeout()).isEqualTo(5000);
+  }
+
+  @Test
+  void slowStatementsAreCancelledByTheServer() {
+    assertThat(app.sql("SHOW statement_timeout").query(String.class).single()).isEqualTo("1s");
+    assertThatThrownBy(() -> app.sql("SELECT pg_sleep(3)").query(String.class).single())
+        .rootCause()
+        .hasMessageContaining("canceling statement due to statement timeout");
   }
 
   @Autowired RequestLogTools tools;
