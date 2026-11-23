@@ -261,8 +261,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **A2** (T0.5, T0.7) Make the queue wait and `Retry-After` configurable. Accept a valid incoming `X-Request-Id`.
 - [x] **A3** (T0.6) Bounded request-log executor and the `helpdesk_requestlog_writes_total{outcome}` metric.
 - [x] **A4** (T0.4) Caffeine cache for `listCustomers`.
-- [ ] **A5** (T1.1) Spring Security resource server: deny by default, security headers. The API key remains only in the `local` profile.
-- [ ] **A6** (T1.2) Map the JWT to a principal (roles, allowed customers) per K1.
+- [x] **A5** (T1.1) Spring Security resource server: deny by default, security headers. The API key remains only in the `local` profile.
+- [x] **A6** (T1.2) Map the JWT to a principal (roles, allowed customers) per K1.
 - [ ] **A7** (T1.3) Endpoint authorization per K3.
 - [ ] **A8** **[L]** (T1.4) `CustomerScopedToolCallback` using the ToolContext. Hide `listCustomers` from the model and stop sending the customer as user text.
 - [ ] **A9** (T1.5) Filter tools per request, so `createTicket` is offered only to users with `tickets-write`. Collect tool-call audit records.
@@ -283,8 +283,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **B2** (T2.5) Testcontainers Postgres tests for the request-log repositories.
 - [x] **B3** (T1.5, T1.6, server side) Migration `V3__user_subject_and_tool_calls.sql`, plus the `logRequest`/`getRequest` changes and tests per K4.
 - [x] **B4** (T2.3) Separate Flyway (DDL) and app (DML) database users for the request log.
-- [ ] **B5** (T2.4) Retention purge job with ShedLock and the `requestlog_purged_rows_total` metric.
-- [ ] **B6** (T2.6) Hikari and statement timeouts for the request log.
+- [x] **B5** (T2.4) Retention purge job with ShedLock and the `requestlog_purged_rows_total` metric.
+- [x] **B6** (T2.6) Hikari and statement timeouts for the request log.
 - [ ] **B7** **[L]** (T2.1) Postgres-backed `TicketTools`: Flyway schema, sequence-based ids, demo seed only in `local`. Add Testcontainers tests; the contract tests must still pass. ⛓ C8 for compose (until then, use Testcontainers).
 - [ ] **B8** (T2.3, T2.6) Least-privilege DB users and timeouts for the ticket server.
 - [ ] **B9** (T3.4, server side) Service-token filter and Origin check per K5 on both Java servers and the Python server (and Rust, if it is kept).
@@ -302,8 +302,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
   - Run CI once per commit: `on: {push: {branches: [main]}, pull_request: {}}`. Every push to a PR branch currently runs CI twice, which doubles the downloads from Maven Central.
   - Make Maven downloads in the `Dockerfile` resilient: a BuildKit cache mount (`RUN --mount=type=cache,target=/root/.m2 ...`) on the `dependency:go-offline` and `package` steps, and Maven HTTP retries (`-Dmaven.resolver.transport=wagon -Dmaven.wagon.http.retryHandler.count=5`, or the equivalent resolver setting in `.mvn/maven.config`). This fixes the flaky `contract (java)` image build seen in CI run 44553395898, where Central briefly failed to serve existing artifacts.
   - Move off the deprecated Node 20 action majors (`actions/checkout@v4`, `actions/setup-java@v4`, `astral-sh/setup-uv@v6`, …) to their current majors while pinning by SHA.
-- [ ] **C5** (T4.6, T6.7 prep) `build-info` and git-commit-id in the root `pom.xml`; `${revision}` versioning.
-- [ ] **C6** (T1.10) Keycloak in compose, with `deploy/keycloak/realm-helpdesk.json` per K1 (users `acme-agent`, `globex-agent`, `acme-writer`, `admin`).
+- [x] **C5** (T4.6, T6.7 prep) `build-info` and git-commit-id in the root `pom.xml`; `${revision}` versioning.
+- [x] **C6** (T1.10) Keycloak in compose, with `deploy/keycloak/realm-helpdesk.json` per K1 (users `acme-agent`, `globex-agent`, `acme-writer`, `admin`).
 - [ ] **C7** **[L]** (T1.7) oauth2-proxy in compose, nginx forwarding `Authorization` per K2, UI redirect to sign-in on 401, user menu and logout, API-key wording removed. ⛓ the end-to-end check needs A5–A7; the UI part can be built against K2/K3 first.
 - [ ] **C8** (T5.9) Compose: pin image tags and digests (Ollama, Postgres, nginx, Keycloak), add a tickets database and the env vars from K5/K8. Label the `rust` profile as legacy (D2).
 - [ ] **C9** (T6.2) Image build and push to GHCR, Trivy scan, CycloneDX SBOM, cosign signing.
