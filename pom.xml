@@ -11,6 +11,10 @@
 
 	<groupId>com.example</groupId>
 	<artifactId>helpdesk-assistant</artifactId>
+	<!-- To become ${revision} (CI-friendly version, set with -Drevision=1.2.3 from release tags,
+	     T6.7) in one commit together with <parent><version> of the three modules: Maven cannot
+	     resolve a mix of a literal and a ${revision} parent version. The revision property and
+	     the flatten-maven-plugin below are already in place for that switch. -->
 	<version>0.0.1-SNAPSHOT</version>
 	<packaging>pom</packaging>
 	<name>helpdesk-assistant</name>
@@ -22,10 +26,13 @@
 	</modules>
 
 	<properties>
+		<!-- Default version for local builds; keep equal to <version> above until the switch. -->
+		<revision>0.0.1-SNAPSHOT</revision>
 		<java.version>21</java.version>
 		<spring-ai.version>1.1.8</spring-ai.version>
 		<!-- Keep in sync with GJF_VERSION in .githooks/pre-commit -->
 		<google-java-format.version>1.37.0</google-java-format.version>
+		<flatten-maven-plugin.version>1.10.0</flatten-maven-plugin.version>
 	</properties>
 
 	<dependencyManagement>
@@ -41,7 +48,66 @@
 	</dependencyManagement>
 
 	<build>
+		<pluginManagement>
+			<plugins>
+				<!-- Applies to every module that declares the Boot plugin: writes
+				     META-INF/build-info.properties, shown under "build" in /actuator/info. -->
+				<plugin>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-maven-plugin</artifactId>
+					<executions>
+						<execution>
+							<id>build-info</id>
+							<goals><goal>build-info</goal></goals>
+						</execution>
+					</executions>
+				</plugin>
+			</plugins>
+		</pluginManagement>
 		<plugins>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>flatten-maven-plugin</artifactId>
+				<version>${flatten-maven-plugin.version}</version>
+				<configuration>
+					<updatePomFile>true</updatePomFile>
+					<flattenMode>resolveCiFriendliesOnly</flattenMode>
+				</configuration>
+				<executions>
+					<execution>
+						<id>flatten</id>
+						<phase>process-resources</phase>
+						<goals><goal>flatten</goal></goals>
+					</execution>
+					<execution>
+						<id>flatten-clean</id>
+						<phase>clean</phase>
+						<goals><goal>clean</goal></goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- Writes git.properties, shown under "git" in /actuator/info. Builds without .git
+			     (the Docker build context excludes it) or with a shallow clone still succeed. -->
+			<plugin>
+				<groupId>io.github.git-commit-id</groupId>
+				<artifactId>git-commit-id-maven-plugin</artifactId>
+				<configuration>
+					<failOnNoGitDirectory>false</failOnNoGitDirectory>
+					<failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
+					<offline>true</offline>
+					<verbose>false</verbose>
+					<abbrevLength>12</abbrevLength>
+					<includeOnlyProperties>
+						<includeOnlyProperty>^git\.branch$</includeOnlyProperty>
+						<includeOnlyProperty>^git\.build\.version$</includeOnlyProperty>
+						<includeOnlyProperty>^git\.commit\.id(\.abbrev)?$</includeOnlyProperty>
+						<includeOnlyProperty>^git\.commit\.time$</includeOnlyProperty>
+						<includeOnlyProperty>^git\.dirty$</includeOnlyProperty>
+						<includeOnlyProperty>^git\.tags$</includeOnlyProperty>
+					</includeOnlyProperties>
+					<commitIdGenerationMode>flat</commitIdGenerationMode>
+				</configuration>
+			</plugin>
 			<plugin>
 				<groupId>com.spotify.fmt</groupId>
 				<artifactId>fmt-maven-plugin</artifactId>
