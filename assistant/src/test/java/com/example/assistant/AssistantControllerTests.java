@@ -3,6 +3,7 @@ package com.example.assistant;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -13,18 +14,20 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(AssistantController.class)
-@Import({ApiKeyFilter.class, RequestIdFilter.class, ApiExceptionHandler.class})
-@TestPropertySource(
-    properties = {"helpdesk.security.api-key=secret", "helpdesk.max-question-length=50"})
+@Import({SecurityConfig.class, RequestIdFilter.class, ApiExceptionHandler.class})
+@TestPropertySource(properties = {"helpdesk.max-question-length=50"})
 @org.springframework.boot.context.properties.EnableConfigurationProperties(HelpdeskProperties.class)
 class AssistantControllerTests {
 
   @Autowired MockMvc mvc;
+
+  @MockitoBean JwtDecoder jwtDecoder;
 
   @MockitoBean AssistantService service;
 
@@ -34,7 +37,7 @@ class AssistantControllerTests {
       throws Exception {
     var req = post("/ask").contentType(MediaType.APPLICATION_JSON).content(body);
     if (key != null) {
-      req.header("X-API-Key", key);
+      req.with(jwt());
     }
     return mvc.perform(req);
   }
@@ -74,9 +77,8 @@ class AssistantControllerTests {
   }
 
   @Test
-  void rejectsMissingOrWrongKey() throws Exception {
+  void requiresAuthentication() throws Exception {
     ask("{\"question\":\"hi\"}", null).andExpect(status().isUnauthorized());
-    ask("{\"question\":\"hi\"}", "nope").andExpect(status().isUnauthorized());
   }
 
   @Test
@@ -113,7 +115,7 @@ class AssistantControllerTests {
             post("/ask")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"question\":\"hi\"}")
-                .header("X-API-Key", "secret")
+                .with(jwt())
                 .header("X-Request-Id", "ingress-1.2:abc_X-9"))
         .andExpect(status().isOk())
         .andExpect(header().string("X-Request-Id", "ingress-1.2:abc_X-9"));
@@ -126,11 +128,24 @@ class AssistantControllerTests {
             post("/ask")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"question\":\"hi\"}")
-                .header("X-API-Key", "secret")
-                .header("X-Request-Id", "bad id\nwith newline"))
+                .with(jwt())
+                .header("X-Request-Id", "bad id with spaces & symbols!"))
         .andExpect(status().isOk())
         .andExpect(
             header().string("X-Request-Id", org.hamcrest.Matchers.matchesPattern("[0-9a-f-]{36}")));
+  }
+
+  @Test
+  void controlCharacterInAHeaderIs400() throws Exception {
+    // the security firewall rejects it when MVC reads the headers of the JSON request
+    mvc.perform(
+            post("/ask")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"hi\"}")
+                .with(jwt())
+                .header("X-Request-Id", "bad id\nwith newline"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.detail").value("Malformed request."));
   }
 
   @Test

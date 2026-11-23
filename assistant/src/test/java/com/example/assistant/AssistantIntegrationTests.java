@@ -1,6 +1,7 @@
 package com.example.assistant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -25,6 +26,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
@@ -37,7 +40,6 @@ import org.springframework.test.web.servlet.MockMvc;
       "spring.ai.model.embedding=none",
       "spring.ai.mcp.client.enabled=false",
       "helpdesk.request-log.enabled=false",
-      "helpdesk.security.api-key=k",
       "management.server.port="
     })
 @AutoConfigureMockMvc
@@ -46,6 +48,9 @@ class AssistantIntegrationTests {
   @Autowired MockMvc mvc;
 
   @Autowired VectorStore vectorStore;
+
+  /** Tokens come from jwt(); the decoder only has to exist, as it does with OIDC_ISSUER_URI set. */
+  @MockitoBean JwtDecoder jwtDecoder;
 
   @Test
   void knowledgeBaseIsIndexedAndSearchable() {
@@ -59,12 +64,19 @@ class AssistantIntegrationTests {
     // The fake chat model echoes the full prompt, so the answer shows what the LLM would have seen.
     mvc.perform(
             post("/ask")
-                .header("X-API-Key", "k")
+                .with(jwt())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     "{\"question\":\"My vpn drops, which protocol should I use, udp or tcp?\"}"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.answer").value(org.hamcrest.Matchers.containsString("UDP to TCP")));
+  }
+
+  @Test
+  void askNeedsAToken() throws Exception {
+    mvc.perform(
+            post("/ask").contentType(MediaType.APPLICATION_JSON).content("{\"question\":\"hi\"}"))
+        .andExpect(status().isUnauthorized());
   }
 
   @TestConfiguration

@@ -97,6 +97,9 @@ public record HelpdeskProperties(
     }
   }
 
-  /** If apiKey is blank, /ask is open (local dev only). */
+  /**
+   * Only used in the {@code local} profile: the X-API-Key that callers must send. If blank, the API
+   * is open (see {@link ApiKeyFilter}). Other profiles authenticate with OIDC bearer tokens.
+   */
   public record Security(String apiKey) {}
 }
