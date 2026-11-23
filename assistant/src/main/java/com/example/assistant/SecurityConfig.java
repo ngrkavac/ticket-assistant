@@ -49,9 +49,10 @@ import org.springframework.web.context.support.WebApplicationContextUtils;
  *
  * <p>Outside the {@code local} profile the caller is an OIDC user: the assistant is an OAuth2
  * resource server that validates the bearer JWT against {@code OIDC_ISSUER_URI} and {@code
- * OIDC_AUDIENCE} (K1/K2), and refuses to start without an issuer. Signing keys come from the
- * issuer's discovery document, or from {@code OIDC_JWK_SET_URI} when that is set. In the {@code
- * local} profile the optional {@code X-API-Key} check is used instead (see {@link ApiKeyFilter}).
+ * OIDC_AUDIENCE} (K1/K2), maps it to a {@link HelpdeskPrincipal} ({@link HelpdeskJwtConverter}),
+ * and refuses to start without an issuer. Signing keys come from the issuer's discovery document,
+ * or from {@code OIDC_JWK_SET_URI} when that is set. In the {@code local} profile the optional
+ * {@code X-API-Key} check is used instead (see {@link ApiKeyFilter}).
  */
 @Configuration
 @EnableWebSecurity
@@ -101,13 +102,20 @@ class SecurityConfig {
   @Bean
   @Order(2)
   @Profile("!local")
-  SecurityFilterChain oidcChain(HttpSecurity http, ObjectProvider<JwtDecoder> jwtDecoder)
+  SecurityFilterChain oidcChain(
+      HttpSecurity http, ObjectProvider<JwtDecoder> jwtDecoder, HelpdeskProperties props)
       throws Exception {
     requireJwtDecoder(jwtDecoder);
     AuthenticationEntryPoint entryPoint =
         problemEntryPoint(new BearerTokenAuthenticationEntryPoint());
     api(http, entryPoint)
-        .oauth2ResourceServer(o -> o.jwt(jwt -> {}).authenticationEntryPoint(entryPoint));
+        .oauth2ResourceServer(
+            o ->
+                o.jwt(
+                        jwt ->
+                            jwt.jwtAuthenticationConverter(
+                                new HelpdeskJwtConverter(props.security())))
+                    .authenticationEntryPoint(entryPoint));
     return http.build();
   }
 
