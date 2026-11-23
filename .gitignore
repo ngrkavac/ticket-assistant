@@ -8,3 +8,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .claude/worktrees/
+
+# flatten-maven-plugin output (CI-friendly ${revision})
+.flattened-pom.xml
