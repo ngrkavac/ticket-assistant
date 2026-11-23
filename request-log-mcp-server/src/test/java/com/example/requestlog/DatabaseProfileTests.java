@@ -1,9 +1,11 @@
 package com.example.requestlog;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 
@@ -62,6 +64,48 @@ class DatabaseProfileTests {
     assertThatCode(() -> DatabaseUrlGuard.check("jdbc:postgresql://db:5432/requestlog", true))
         .doesNotThrowAnyException();
     assertThatCode(() -> DatabaseUrlGuard.check("jdbc:h2:mem:x", false)).doesNotThrowAnyException();
+  }
+
+  @Test
+  void prodProfileRequiresASeparateMigrationUser() {
+    String[] database = {
+      // Never contacted: the guard fails before the DataSource or Flyway are created.
+      "--REQUEST_LOG_DB_URL=jdbc:postgresql://localhost:1/requestlog",
+      "--REQUEST_LOG_DB_USER=requestlog_app",
+      "--REQUEST_LOG_DB_PASSWORD=x"
+    };
+    assumeTrue(System.getenv("REQUEST_LOG_DB_MIGRATION_USER") == null, "migration user is set");
+    assertThatThrownBy(() -> start("prod", database))
+        .hasStackTraceContaining("REQUEST_LOG_DB_MIGRATION_USER and")
+        .hasStackTraceContaining("must be set in the prod profile");
+    String[] sameUser = Arrays.copyOf(database, database.length + 1);
+    sameUser[database.length] = "--REQUEST_LOG_DB_MIGRATION_USER=requestlog_app";
+    assertThatThrownBy(() -> start("prod", sameUser))
+        .hasStackTraceContaining("must differ from REQUEST_LOG_DB_USER");
+  }
+
+  @Test
+  void guardChecksTheMigrationUser() {
+    assertThatThrownBy(() -> DatabaseUrlGuard.checkMigrationUser(null, "app"))
+        .hasMessageContaining("must be set");
+    assertThatThrownBy(() -> DatabaseUrlGuard.checkMigrationUser(" ", "app"))
+        .hasMessageContaining("must be set");
+    assertThatThrownBy(() -> DatabaseUrlGuard.checkMigrationUser("app", "app"))
+        .hasMessageContaining("must differ");
+    assertThatCode(() -> DatabaseUrlGuard.checkMigrationUser("migrator", "app"))
+        .doesNotThrowAnyException();
+    assertThatCode(() -> DatabaseUrlGuard.checkMigrationUser("migrator", null))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  void grantsQuoteEveryIdentifier() {
+    assertThat(MigrationUserConfig.AppUserGrants.grants("public", "flyway_schema_history", "a\"b"))
+        .containsExactly(
+            "GRANT USAGE ON SCHEMA \"public\" TO \"a\"\"b\"",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA \"public\" TO \"a\"\"b\"",
+            "REVOKE ALL ON TABLE \"public\".\"flyway_schema_history\" FROM \"a\"\"b\"",
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA \"public\" TO \"a\"\"b\"");
   }
 
   @Test
