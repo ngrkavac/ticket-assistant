@@ -78,6 +78,7 @@ Minimal React + TypeScript (Vite) page, built from the Figma frame in `FIGMA_IMP
 ```bash
 cd ui && npm install
 HELPDESK_API_KEY=... npm run dev     # http://localhost:5173 (or put the key in ui/.env.local)
+npm run lint && npm test && npm run build   # ESLint, Vitest + Testing Library, type check and build (CI job `ui`)
 ```
 
 The Vite dev server proxies `/ask`, `/requests`, `/customers` and `/questions` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`) and adds the `X-API-Key` header itself, so the key never reaches the browser.
