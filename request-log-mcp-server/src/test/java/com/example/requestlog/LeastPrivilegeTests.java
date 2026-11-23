@@ -3,7 +3,9 @@ package com.example.requestlog;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.zaxxer.hikari.HikariDataSource;
 import java.util.UUID;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,7 +22,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 /**
  * The {@code prod} profile against real PostgreSQL (Testcontainers, needs Docker) with separate
  * users: Flyway migrates as {@code requestlog_migrator}, the application runs as {@code
- * requestlog_app}, which may only read and write rows.
+ * requestlog_app}, which may only read and write rows. Also checks the pool size and the statement
+ * timeout on real PostgreSQL.
  */
 @SpringBootTest
 @ActiveProfiles("prod")
@@ -38,9 +41,30 @@ class LeastPrivilegeTests {
     registry.add("REQUEST_LOG_DB_PASSWORD", () -> "app-secret");
     registry.add("REQUEST_LOG_DB_MIGRATION_USER", () -> "requestlog_migrator");
     registry.add("REQUEST_LOG_DB_MIGRATION_PASSWORD", () -> "migrator-secret");
+    registry.add("REQUEST_LOG_DB_POOL_SIZE", () -> "3");
+    registry.add("REQUEST_LOG_DB_STATEMENT_TIMEOUT", () -> "1s");
+  }
+
+  @Autowired DataSource dataSource;
+
+  @Test
+  void poolHasTheConfiguredSizeAndFailsFast() {
+    var pool = (HikariDataSource) dataSource;
+    assertThat(pool.getMaximumPoolSize()).isEqualTo(3);
+    assertThat(pool.getConnectionTimeout()).isEqualTo(5000);
+  }
+
+  @Test
+  void slowStatementsAreCancelledByTheServer() {
+    assertThat(app.sql("SHOW statement_timeout").query(String.class).single()).isEqualTo("1s");
+    assertThatThrownBy(() -> app.sql("SELECT pg_sleep(3)").query(String.class).single())
+        .rootCause()
+        .hasMessageContaining("canceling statement due to statement timeout");
   }
 
   @Autowired RequestLogTools tools;
+
+  @Autowired RetentionPurgeJob purgeJob;
 
   /** The application's own connection pool, i.e. the application user. */
   @Autowired JdbcClient app;
@@ -78,6 +102,36 @@ class LeastPrivilegeTests {
     // DELETE is granted for the retention purge (B5).
     assertThat(app.sql("DELETE FROM request_log WHERE request_id = :id").param("id", id).update())
         .isEqualTo(1);
+  }
+
+  @Test
+  void appUserRunsTheRetentionPurgeWithItsShedLock() {
+    String old = UUID.randomUUID().toString();
+    String recent = UUID.randomUUID().toString();
+    jdbcAsSuperuser()
+        .sql(
+            "INSERT INTO request_log (request_id, question, status, duration_ms, created_at) VALUES"
+                + " (:old, 'q', 'SUCCESS', 1, now() - interval '91 days'),"
+                + " (:recent, 'q', 'SUCCESS', 1, now() - interval '89 days')")
+        .param("old", old)
+        .param("recent", recent)
+        .update();
+
+    purgeJob.purge();
+
+    assertThat(tools.getRequest(recent)).isNotNull();
+    assertThat(
+            app.sql("SELECT count(*) FROM request_log WHERE request_id = :id")
+                .param("id", old)
+                .query(Long.class)
+                .single())
+        .isZero();
+    assertThat(
+            app.sql("SELECT locked_by FROM shedlock WHERE name = :name")
+                .param("name", RetentionPurgeJob.LOCK_NAME)
+                .query(String.class)
+                .list())
+        .hasSize(1);
   }
 
   @Test
