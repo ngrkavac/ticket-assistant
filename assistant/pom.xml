@@ -26,6 +26,11 @@
 			<groupId>io.micrometer</groupId>
 			<artifactId>micrometer-registry-prometheus</artifactId>
 		</dependency>
+		<!-- Short-lived cache of the ticket server's customer list (version from the Spring Boot BOM) -->
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
+		</dependency>
 		<!-- Chat model (local Ollama, free) -->
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
