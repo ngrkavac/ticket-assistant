@@ -3,6 +3,7 @@ package com.example.requestlog;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -86,6 +87,24 @@ class RequestLogRepository {
       sql = sql.param("customer", customer);
     }
     return sql.query(RequestLogRepository::map).list();
+  }
+
+  /**
+   * Deletes at most {@code limit} rows created before {@code cutoff}, oldest first, and returns how
+   * many it deleted. Each call is its own short transaction, so a large backlog never holds locks
+   * on the whole table (see {@link RetentionPurgeJob}).
+   */
+  @Transactional
+  int deleteCreatedBefore(Instant cutoff, int limit) {
+    return jdbc.sql(
+            """
+            DELETE FROM request_log WHERE id IN (
+              SELECT id FROM request_log WHERE created_at < :cutoff ORDER BY created_at, id
+              LIMIT :limit)
+            """)
+        .param("cutoff", Timestamp.from(cutoff))
+        .param("limit", limit)
+        .update();
   }
 
   private static RequestLogEntry map(ResultSet rs, int row) throws SQLException {

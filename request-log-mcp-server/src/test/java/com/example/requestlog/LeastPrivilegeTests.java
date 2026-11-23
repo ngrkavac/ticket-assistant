@@ -42,6 +42,8 @@ class LeastPrivilegeTests {
 
   @Autowired RequestLogTools tools;
 
+  @Autowired RetentionPurgeJob purgeJob;
+
   /** The application's own connection pool, i.e. the application user. */
   @Autowired JdbcClient app;
 
@@ -78,6 +80,36 @@ class LeastPrivilegeTests {
     // DELETE is granted for the retention purge (B5).
     assertThat(app.sql("DELETE FROM request_log WHERE request_id = :id").param("id", id).update())
         .isEqualTo(1);
+  }
+
+  @Test
+  void appUserRunsTheRetentionPurgeWithItsShedLock() {
+    String old = UUID.randomUUID().toString();
+    String recent = UUID.randomUUID().toString();
+    jdbcAsSuperuser()
+        .sql(
+            "INSERT INTO request_log (request_id, question, status, duration_ms, created_at) VALUES"
+                + " (:old, 'q', 'SUCCESS', 1, now() - interval '91 days'),"
+                + " (:recent, 'q', 'SUCCESS', 1, now() - interval '89 days')")
+        .param("old", old)
+        .param("recent", recent)
+        .update();
+
+    purgeJob.purge();
+
+    assertThat(tools.getRequest(recent)).isNotNull();
+    assertThat(
+            app.sql("SELECT count(*) FROM request_log WHERE request_id = :id")
+                .param("id", old)
+                .query(Long.class)
+                .single())
+        .isZero();
+    assertThat(
+            app.sql("SELECT locked_by FROM shedlock WHERE name = :name")
+                .param("name", RetentionPurgeJob.LOCK_NAME)
+                .query(String.class)
+                .list())
+        .hasSize(1);
   }
 
   @Test
