@@ -15,6 +15,9 @@ class RequestLogRepository {
   private static final String COLUMNS =
       "id, request_id, question, answer, status, error_type, duration_ms, customer, created_at";
 
+  /** {@link #COLUMNS} plus the audit columns, which only a single-request read returns (K4). */
+  private static final String DETAIL_COLUMNS = COLUMNS + ", user_subject, tool_calls";
+
   private final JdbcClient jdbc;
 
   RequestLogRepository(JdbcClient jdbc) {
@@ -28,20 +31,24 @@ class RequestLogRepository {
    * conflict target, so the same SQL also runs on H2 in the local profile).
    */
   @Transactional
-  RequestLogEntry save(
+  RequestLogDetail save(
       String requestId,
       String question,
       String answer,
       String status,
       String errorType,
       long durationMs,
-      String customer) {
+      String customer,
+      String userSubject,
+      String toolCalls) {
     jdbc.sql(
             """
             INSERT INTO request_log
-              (request_id, question, answer, status, error_type, duration_ms, customer)
+              (request_id, question, answer, status, error_type, duration_ms, customer,
+               user_subject, tool_calls)
             VALUES
-              (:requestId, :question, :answer, :status, :errorType, :durationMs, :customer)
+              (:requestId, :question, :answer, :status, :errorType, :durationMs, :customer,
+               :userSubject, :toolCalls)
             ON CONFLICT DO NOTHING
             """)
         .param("requestId", requestId)
@@ -51,14 +58,16 @@ class RequestLogRepository {
         .param("errorType", errorType)
         .param("durationMs", durationMs)
         .param("customer", customer)
+        .param("userSubject", userSubject)
+        .param("toolCalls", toolCalls)
         .update();
     return findByRequestId(requestId).orElseThrow();
   }
 
-  Optional<RequestLogEntry> findByRequestId(String requestId) {
-    return jdbc.sql("SELECT " + COLUMNS + " FROM request_log WHERE request_id = :requestId")
+  Optional<RequestLogDetail> findByRequestId(String requestId) {
+    return jdbc.sql("SELECT " + DETAIL_COLUMNS + " FROM request_log WHERE request_id = :requestId")
         .param("requestId", requestId)
-        .query(RequestLogRepository::map)
+        .query(RequestLogRepository::mapDetail)
         .optional();
   }
 
@@ -90,6 +99,22 @@ class RequestLogRepository {
         rs.getString("error_type"),
         rs.getLong("duration_ms"),
         rs.getString("customer"),
+        created.toInstant());
+  }
+
+  private static RequestLogDetail mapDetail(ResultSet rs, int row) throws SQLException {
+    Timestamp created = rs.getTimestamp("created_at");
+    return new RequestLogDetail(
+        rs.getLong("id"),
+        rs.getString("request_id"),
+        rs.getString("question"),
+        rs.getString("answer"),
+        rs.getString("status"),
+        rs.getString("error_type"),
+        rs.getLong("duration_ms"),
+        rs.getString("customer"),
+        rs.getString("user_subject"),
+        rs.getString("tool_calls"),
         created.toInstant());
   }
 }
