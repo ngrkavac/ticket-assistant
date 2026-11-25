@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ask, listCustomers, listQuestions, listRequests, type CatalogQuestion, type LoggedRequest } from './api';
+import {
+  ask,
+  getUser,
+  listCustomers,
+  listQuestions,
+  listRequests,
+  type CatalogQuestion,
+  type LoggedRequest,
+  type User,
+} from './api';
 import { AnswerList, type AnswerResult } from './components/AnswerList';
 import { CustomerPicker } from './components/CustomerPicker';
 import { Hero } from './components/Hero';
@@ -13,11 +22,14 @@ import { Switch } from './components/Switch';
 // The assistant stores each request in the background, so give it a moment before re-reading.
 const LOG_WRITE_DELAY_MS = 500;
 const HISTORY_SIZE = 5;
+const ADMIN_ROLE = 'helpdesk-admin';
 
 type Message = { text: string; error?: boolean };
 type History = { customer: string; rows: LoggedRequest[]; error: string | null };
 
 export default function App() {
+  // Null without oauth2-proxy in front (Vite dev server): no user menu, nothing is restricted.
+  const [user, setUser] = useState<User | null>(null);
   const [customers, setCustomers] = useState<string[]>([]);
   const [customer, setCustomer] = useState<string | null>(null);
   const [customerError, setCustomerError] = useState<string | null>(null);
@@ -57,6 +69,7 @@ export default function App() {
   const current = history?.customer === customer ? history : null;
 
   useEffect(() => {
+    void getUser().then(setUser);
     listCustomers()
       .then((names) => {
         setCustomers(names);
@@ -130,7 +143,7 @@ export default function App() {
 
   return (
     <div className="site" id="top">
-      <SiteHeader />
+      <SiteHeader user={user} />
       <main className="page">
         <Hero />
         <section id="workspace" className="workspace-section" aria-labelledby="workspace-title">
@@ -161,7 +174,12 @@ export default function App() {
             </section>
             <div className="workspace__divider" aria-hidden="true" />
             <section className="workspace__column" aria-label="New question and history">
-              <NewQuestionForm disabled={busy} onAdded={handleAdded} />
+              <NewQuestionForm
+                disabled={busy}
+                // The assistant lets only admins add catalog questions (K3).
+                restricted={user !== null && !user.roles.includes(ADMIN_ROLE)}
+                onAdded={handleAdded}
+              />
               <Switch id="show-history" label="Show history" checked={showHistory} onChange={setShowHistory} />
               {showHistory && (
                 <HistoryTable

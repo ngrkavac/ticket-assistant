@@ -3,10 +3,12 @@ import { addQuestion, type CatalogQuestion } from '../api';
 
 type Props = {
   disabled: boolean;
+  /** The user may not add questions: the form is shown disabled, with the reason. */
+  restricted?: boolean;
   onAdded: (question: CatalogQuestion) => void;
 };
 
-export function NewQuestionForm({ disabled, onAdded }: Props) {
+export function NewQuestionForm({ disabled, restricted = false, onAdded }: Props) {
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,14 +51,14 @@ export function NewQuestionForm({ disabled, onAdded }: Props) {
           placeholder="e.g. Is the printer on the 2nd floor working?"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          disabled={disabled || saving}
+          disabled={disabled || restricted || saving}
         />
-        <button className="button button--secondary" type="submit" disabled={disabled || saving}>
+        <button className="button button--secondary" type="submit" disabled={disabled || restricted || saving}>
           {saving ? 'Saving…' : 'Add to list'}
         </button>
       </div>
       <p className={`hint${error ? ' hint--error' : ''}`} role={error ? 'alert' : undefined}>
-        {error ?? 'Saved for everyone and selected, ready to ask.'}
+        {error ?? (restricted ? 'Only admins can add questions.' : 'Saved for everyone and selected, ready to ask.')}
       </p>
     </form>
   );

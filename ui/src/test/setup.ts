@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest';
 
 // jsdom has no matchMedia; ThemeToggle reads the colour-scheme preference through it.
 if (!window.matchMedia) {
@@ -17,4 +17,9 @@ if (!window.matchMedia) {
     }) as MediaQueryList;
 }
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+});

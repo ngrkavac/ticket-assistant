@@ -18,12 +18,16 @@ brew install ollama && ollama serve &   # or install the Ollama app
 ollama pull llama3.1                      # ~5 GB, supports tool calling
 ./mvnw -q -pl ticket-mcp-server-java spring-boot:run # terminal 1 (or the Python/Rust server, see below)
 ./mvnw -q -pl request-log-mcp-server spring-boot:run # terminal 2 (in-memory H2 unless REQUEST_LOG_DB_URL is set)
-./mvnw -q -pl assistant spring-boot:run              # terminal 3 (first start downloads the embedding model)
+SPRING_PROFILES_ACTIVE=local ./mvnw -q -pl assistant spring-boot:run   # terminal 3 (first start downloads the embedding model)
 ```
+
+The `local` profile skips the token check (optionally guarded by `HELPDESK_API_KEY`, sent as `X-API-Key`). Without it the assistant needs `OIDC_ISSUER_URI` and a bearer token on every request; see "Local sign-in (Keycloak)" below.
 
 ## Try it
 
 ```bash
+# Local profile (see above); drop the X-API-Key header if HELPDESK_API_KEY is not set.
+# Against compose, send "Authorization: Bearer $TOKEN" instead (see "Local sign-in (Keycloak)").
 # RAG only (answer comes from KB)
 curl -s localhost:8080/ask -H "X-API-Key: $HELPDESK_API_KEY" -H 'Content-Type: application/json' -d '{"question":"My VPN keeps dropping, what should I try?"}'
 # MCP only (live ticket data)
@@ -77,15 +81,27 @@ Minimal React + TypeScript (Vite) page, built from the Figma frame in `FIGMA_IMP
 
 ```bash
 cd ui && npm install
-HELPDESK_API_KEY=... npm run dev     # http://localhost:5173 (or put the key in ui/.env.local)
+npm run dev                          # http://localhost:5173, against an assistant in the `local` profile
 npm run lint && npm test && npm run build   # ESLint, Vitest + Testing Library, type check and build (CI job `ui`)
 ```
 
-The Vite dev server proxies `/ask`, `/requests`, `/customers` and `/questions` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`) and adds the `X-API-Key` header itself, so the key never reaches the browser.
+The Vite dev server proxies `/ask`, `/requests`, `/customers` and `/questions` to the assistant (`ASSISTANT_URL`, default `http://localhost:8080`). There is no sign-in there, so run the assistant with the `local` profile; if it has a `HELPDESK_API_KEY`, set the same value for `npm run dev` (shell env or `ui/.env.local`) and the proxy adds it as `X-API-Key`. Without oauth2-proxy the UI shows no user menu.
 
-In Docker Compose the UI is the `ui` service, also on http://localhost:5173 (published on loopback only). `ui/Dockerfile` builds the static files and serves them with unprivileged nginx, which does what the dev proxy does: it forwards `/ask`, `/requests`, `/customers` and `/questions` to `assistant:8080` and adds `X-API-Key` from `HELPDESK_API_KEY` at container start (`ui/nginx.conf.template`). Stop `npm run dev` first if it is running, because both use port 5173. Anyone who can reach the UI can use the assistant with that key, so put real authentication in front of it before exposing it beyond localhost.
+In Docker Compose the UI is behind **oauth2-proxy** on http://localhost:5173 (loopback only), and you sign in with a Keycloak demo user (see "Local sign-in (Keycloak)"). The request path (contract K2):
 
-UI endpoints on the assistant (all need the same API key as `/ask`):
+```
+browser --cookie--> oauth2-proxy :5173 --X-Forwarded-Access-Token--> ui (nginx) --Authorization: Bearer--> assistant
+```
+
+- oauth2-proxy (`quay.io/oauth2-proxy/oauth2-proxy`) signs the user in at Keycloak (client `helpdesk-ui`, authorization code + PKCE), keeps the tokens in an encrypted session cookie (`resolva_session`), refreshes the access token before it expires (`OAUTH2_PROXY_COOKIE_REFRESH=4m`, tokens live 5 minutes) and passes it upstream. The browser never sees a token.
+- `ui/Dockerfile` builds the static files and serves them with unprivileged nginx. nginx forwards `/ask`, `/requests`, `/customers` and `/questions` to `assistant:8080` with `Authorization: Bearer <access token>` (`ui/nginx.conf.template`). It always overwrites `Authorization` and drops cookies, `X-API-Key` and the `X-Forwarded-*` user headers, but it trusts the token header it receives, so the `ui` service is not published: only oauth2-proxy may reach it.
+- Without a session, page loads go straight to the Keycloak login page and API calls get 401. On a 401 the UI reloads through `/oauth2/sign_in?rd=<current page>` (at most once a minute, so a token the assistant rejects cannot cause a redirect loop).
+- The user menu (top right) shows the name, e-mail and roles from `/oauth2/userinfo`. **Sign out** goes to `/oauth2/sign_out`, which clears the cookie and also ends the Keycloak session (`OAUTH2_PROXY_BACKEND_LOGOUT_URL`), so the next visit asks for the password again.
+- Users without `helpdesk-admin` see the "New question" form disabled, because the assistant lets only admins add catalog questions (K3).
+
+Stop `npm run dev` first if it is running, because both use port 5173.
+
+UI endpoints on the assistant (all need a bearer token, or the `local` profile):
 
 | Endpoint | Returns |
 |---|---|
@@ -121,22 +137,23 @@ Java code follows [Google Java Style](https://google.github.io/styleguide/javagu
 | Area | What is in place |
 |---|---|
 | API | `POST /ask` with bean validation, configurable max length (`helpdesk.max-question-length`), RFC 7807 errors; upstream failures return a generic 503 (no internals leaked) |
-| Auth | Set `HELPDESK_API_KEY` to require an `X-API-Key` header on `/ask`, `/requests`, `/customers` and `/questions` (constant-time compare). The MCP servers have no auth: keep them on a private network (compose publishes neither them nor PostgreSQL) |
+| Auth | Every app endpoint needs a bearer JWT from `OIDC_ISSUER_URI` with audience `OIDC_AUDIENCE` (default `helpdesk-assistant`); `OIDC_JWK_SET_URI` optionally fetches the keys from another URL; `OIDC_ROLES_CLAIM` / `OIDC_CUSTOMERS_CLAIM` name the claims (defaults `roles` / `customers`). The UI signs users in through oauth2-proxy (see "Web UI"). `HELPDESK_API_KEY` (`X-API-Key`) only works in the `local` profile. The MCP servers have no auth: keep them on a private network (compose publishes neither them nor PostgreSQL) |
 | Prompt safety | System prompt treats user/ticket text as data; ticket tool inputs are validated |
 | Resilience | Virtual threads, max 8 concurrent LLM calls (`helpdesk.max-concurrent-requests`; extra requests get 429 + `Retry-After`), HTTP connect/read timeouts for the LLM, 20s MCP request timeout, graceful shutdown. LLM/MCP failures map to 503, our own bugs to 500. The assistant needs the MCP server reachable at startup (compose enforces ordering) |
 | Observability | Actuator on a separate management port (`9090`, not published in compose): `health` (liveness/readiness; readiness includes the KB-indexed check), `metrics`, `prometheus`; `X-Request-Id` header and request id in every log line; question text is never written to application logs (it is stored in the request-log database, see above) |
-| Config | Via env: `OLLAMA_URL`, `OLLAMA_MODEL`, `TICKETS_MCP_URL`, `REQUEST_LOG_MCP_URL`, `REQUEST_LOG_ENABLED`, `HELPDESK_API_KEY`, `KB_LOCATION`, `MANAGEMENT_PORT`, `EMBEDDING_CACHE_DIR`; request-log server: `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD` |
-| Packaging | Multi-stage `Dockerfile` for the Java modules (layered jar, non-root user, `--build-arg MODULE=...`); `ticket-mcp-server-python/Dockerfile` and `ticket-mcp-server-rust/Dockerfile` (non-root); `ui/Dockerfile` (static build on unprivileged nginx with the API proxy); `docker-compose.yml` (Ollama, PostgreSQL, request log, assistant, web UI, and the ticket server chosen by profile); GitHub Actions CI (Maven, Python, Rust and a contract-test matrix over the three ticket servers) |
+| Config | Via env: `OLLAMA_URL`, `OLLAMA_MODEL`, `TICKETS_MCP_URL`, `REQUEST_LOG_MCP_URL`, `REQUEST_LOG_ENABLED`, `OIDC_ISSUER_URI`, `OIDC_AUDIENCE`, `OIDC_JWK_SET_URI`, `OIDC_ROLES_CLAIM`, `OIDC_CUSTOMERS_CLAIM`, `HELPDESK_API_KEY` (`local` profile only), `KB_LOCATION`, `MANAGEMENT_PORT`, `EMBEDDING_CACHE_DIR`; request-log server: `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD` |
+| Packaging | Multi-stage `Dockerfile` for the Java modules (layered jar, non-root user, `--build-arg MODULE=...`); `ticket-mcp-server-python/Dockerfile` and `ticket-mcp-server-rust/Dockerfile` (non-root); `ui/Dockerfile` (static build on unprivileged nginx with the API proxy); `docker-compose.yml` (Ollama, PostgreSQL, request log, assistant, web UI behind oauth2-proxy, Keycloak, and the ticket server chosen by profile); GitHub Actions CI (Maven, Python, Rust and a contract-test matrix over the three ticket servers) |
 | Embeddings | ONNX model is cached in `EMBEDDING_CACHE_DIR` (`/models` volume in compose), so restarts do not re-download it. The very first start still needs internet |
 | Tests | `./mvnw test`: tool validation, controller tests (auth, validation, error mapping) and a full-context integration test with fake models (KB indexing, retrieval, context reaching the prompt); no LLM needed. `./mvnw verify` also enforces 80% line coverage (JaCoCo, `*Application` classes excluded); report in `<module>/target/site/jacoco` |
 
 Run everything in containers:
 
 ```bash
-HELPDESK_API_KEY=change-me REQUEST_LOG_DB_PASSWORD=change-me-too COMPOSE_PROFILES=java docker compose up --build
-curl -s localhost:8080/ask -H 'X-API-Key: change-me' -H 'Content-Type: application/json' -d '{"question":"How do I reset my password?"}'
-open http://localhost:5173   # web UI
+REQUEST_LOG_DB_PASSWORD=change-me-too COMPOSE_PROFILES=java docker compose up --build
+open http://localhost:5173   # web UI: sign in as acme-agent / local-only-password
 ```
+
+For curl, get a token first (see "Local sign-in (Keycloak)"). The assistant is published on `127.0.0.1:8080` only.
 
 `COMPOSE_PROFILES` picks the ticket server: `java`, `python` or `rust`. Exactly one must be active, because the assistant needs a ticket server at startup. Put `COMPOSE_PROFILES=java` in `.env` to make it the default, and override it per run with `COMPOSE_PROFILES=rust docker compose up --build`. Each implementation answers to the network alias `ticket-mcp-server`. To switch a running stack, run `docker compose down` first so the old server stops.
 
@@ -165,6 +182,18 @@ curl -s localhost:8180/realms/helpdesk/protocol/openid-connect/token \
   -d username=acme-agent -d password=local-only-password | jq -r .access_token
 ```
 
-The assistant does not check these tokens yet (it still uses `HELPDESK_API_KEY`); the token check and the sign-in through oauth2-proxy are being added.
+Call the assistant with it:
+
+```bash
+TOKEN=$(curl -s localhost:8180/realms/helpdesk/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=helpdesk-dev-cli \
+  -d username=acme-agent -d password=local-only-password | jq -r .access_token)
+curl -s localhost:8080/ask -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"question":"How do I reset my password?","customer":"acme"}'
+```
+
+In compose the assistant validates the tokens with `OIDC_ISSUER_URI=http://localhost:8180/realms/helpdesk` and fetches the keys from `OIDC_JWK_SET_URI=http://keycloak:8080/realms/helpdesk/protocol/openid-connect/certs`, because the issuer URL is not reachable from inside the container.
+
+The web UI signs in through oauth2-proxy with the `helpdesk-ui` client. oauth2-proxy skips OIDC discovery for the same reason: it sends the browser to `localhost:8180` to log in and calls `keycloak:8080` for the token, keys, user info and logout. Its local-only defaults: `HELPDESK_UI_CLIENT_SECRET` (shared with the realm) and `OAUTH2_PROXY_COOKIE_SECRET` (default `local-only-cookie-secret-32bytes`; it must be 16, 24 or 32 bytes). The realm only accepts the redirect URI `http://localhost:5173/oauth2/callback`, so open the UI on exactly that host and port.
 
 Known limits (deliberate for a demo): in-memory vector store re-indexed on each start, demo tickets in memory, no retention/purge for the request log (questions are kept indefinitely: add a cleanup job if they may contain personal data), no rate limiting or TLS (put a gateway/ingress in front), Docker setup not built or run here.
