@@ -203,4 +203,11 @@ In compose the assistant validates the tokens with `OIDC_ISSUER_URI=http://local
 
 The web UI signs in through oauth2-proxy with the `helpdesk-ui` client. oauth2-proxy skips OIDC discovery for the same reason: it sends the browser to `localhost:8180` to log in and calls `keycloak:8080` for the token, keys, user info and logout. Its local-only defaults: `HELPDESK_UI_CLIENT_SECRET` (shared with the realm) and `OAUTH2_PROXY_COOKIE_SECRET` (default `local-only-cookie-secret-32bytes`; it must be 16, 24 or 32 bytes). The realm only accepts the redirect URI `http://localhost:5173/oauth2/callback`, so open the UI on exactly that host and port.
 
+**E2E smoke test.** `.github/e2e/smoke.sh` drives a running compose stack the way a browser does: it signs in as `acme-agent` through oauth2-proxy and the Keycloak login form, then checks `/customers`, `/ask`, the new row in `/requests`, the 403 for another customer (`globex`) and the 401 without a session. It needs `curl` and `jq`. CI runs it in `.github/workflows/e2e-smoke.yml` on pull requests that touch the wiring (compose, Dockerfiles, nginx, the realm, application properties, POMs) and on demand (Actions → E2E smoke → Run workflow, with the ticket server profile and model as inputs), with the tiny model `qwen2.5:0.5b`. Locally:
+
+```bash
+OLLAMA_MODEL=qwen2.5:0.5b COMPOSE_PROFILES=java docker compose up --build --detach --wait
+bash .github/e2e/smoke.sh   # on other host ports: E2E_UI_PORT=... E2E_KEYCLOAK_PORT=...
+```
+
 Known limits (deliberate for a demo): in-memory vector store re-indexed on each start, no retention/purge for the request log (questions are kept indefinitely: add a cleanup job if they may contain personal data), no rate limiting or TLS (put a gateway/ingress in front), Docker setup not built or run here.
