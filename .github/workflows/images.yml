@@ -68,7 +68,8 @@ jobs:
         env: {TAGS: "${{ steps.meta.outputs.tags }}"}
         run: echo "IMAGE_REF=$(printf '%s\n' "$TAGS" | head -n 1)" >> "$GITHUB_ENV"
       # Fails on HIGH or CRITICAL vulnerabilities that have a fix available (OS packages and
-      # application dependencies). Accepted exceptions go to .github/trivyignore with a reason.
+      # application dependencies). Accepted exceptions go to .github/trivyignore.yaml, scoped by package,
+      # with a reason and an expiry date (expired_at), after which the finding fails the gate again.
       - name: Trivy scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -79,7 +80,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           format: table
-          trivyignores: .github/trivyignore
+          trivyignores: .github/trivyignore.yaml
       # CycloneDX SBOM of the whole image (OS packages, the Java dependencies inside the jar, the
       # Python and npm packages), kept as a workflow artifact and, when published, attested below.
       - name: SBOM
