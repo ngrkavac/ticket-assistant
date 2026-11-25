@@ -1,7 +1,6 @@
 package com.example.tickets;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.net.URI;
@@ -12,7 +11,6 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.context.ActiveProfiles;
 
 /** Service token and Origin check on the MCP endpoints (K5), against the running server. */
@@ -112,18 +110,11 @@ class McpServiceAuthTests {
   }
 
   @Test
-  void prodProfileRequiresAToken() {
+  void blankTokenOnlyDisablesTheTokenCheck() {
+    // The prod profile never gets here without a token: see ProdConfigGuardTests.
     var config = new McpServiceAuthConfig();
-    var prod = new MockEnvironment();
-    prod.setActiveProfiles("prod");
-    assertThatThrownBy(() -> config.mcpServiceAuthFilter(" ", "", prod))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("MCP_SERVICE_TOKEN must be set in the prod profile");
-
-    var local = new MockEnvironment();
-    local.setActiveProfiles("local");
-    assertThat(config.mcpServiceAuthFilter("", "", local).getFilter()).isNotNull();
-    assertThat(config.mcpServiceAuthFilter("token", "", prod).getFilter()).isNotNull();
+    assertThat(config.mcpServiceAuthFilter(" ", "").getFilter()).isNotNull();
+    assertThat(config.mcpServiceAuthFilter("token", "").getFilter()).isNotNull();
   }
 
   @Test

@@ -17,8 +17,6 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
-import org.springframework.core.env.Environment;
-import org.springframework.core.env.Profiles;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -30,8 +28,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * listed in {@code MCP_ALLOWED_ORIGINS} (comma-separated, empty by default) gets 403, so a browser
  * page cannot call the server (DNS rebinding); server-to-server clients send no {@code Origin}.
  *
- * <p>A blank token disables the token check (not the Origin check). That fails startup in the
- * {@code prod} profile and logs a warning everywhere else.
+ * <p>A blank token disables the token check (not the Origin check) and logs a warning. The {@code
+ * prod} profile requires a token: {@link ProdConfigGuard} fails startup without one.
  */
 @Configuration(proxyBeanMethods = false)
 class McpServiceAuthConfig {
@@ -45,14 +43,9 @@ class McpServiceAuthConfig {
   @Bean
   FilterRegistrationBean<ServiceAuthFilter> mcpServiceAuthFilter(
       @Value("${" + TOKEN_PROPERTY + ":}") String token,
-      @Value("${" + ORIGINS_PROPERTY + ":}") String allowedOrigins,
-      Environment environment) {
+      @Value("${" + ORIGINS_PROPERTY + ":}") String allowedOrigins) {
     if (token.isBlank()) {
-      if (environment.acceptsProfiles(Profiles.of("prod"))) {
-        throw new IllegalStateException(
-            "MCP_SERVICE_TOKEN must be set in the prod profile: every MCP request must carry it as"
-                + " 'Authorization: Bearer <token>'.");
-      }
+      // Never reached in the prod profile: ProdConfigGuard fails startup without a token first.
       log.warn("MCP_SERVICE_TOKEN is not set: MCP requests are accepted without a token");
     }
     var registration =
