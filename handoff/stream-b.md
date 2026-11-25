@@ -1,38 +1,28 @@
 # Stream b handoff – 2026-11-25
 ## Done this session
-- B8 – `prod/b8-ticket-db-users` (base `main` @ 4dc972d)
-- B9 – `prod/b9-mcp-service-token` (base `prod/b8-ticket-db-users`, stacked: both change `ticket-mcp-server-java/src/main/resources/application*.properties` and the ticket server's prod tests)
+- b-py-image – `prod/b-py-image-patch` (base `origin/main` @ 1091778)
+- B11 – `prod/b11-observability` (base `prod/b9-mcp-service-token`, stacked: both change the Java servers' `application*.properties`, `McpServiceAuthConfig` and `LeastPrivilegeTests`, and the Python `server.py`)
 
 ## Ready to push
 
-### Branch `prod/b8-ticket-db-users` (base: `main`)
-**PR title:** Ticket server: least-privilege DB users and timeouts (B8)
+### Branch `prod/b-py-image-patch` (base: `main`)
+**PR title:** Python ticket server image: upgrade Debian packages for the Trivy gate
 
 **PR body:**
-Implements B8 / T2.3 + T2.6 of PRODUCTION_READINESS_PLAN.md for the Java ticket server, the same way B4/B6 did for the request log.
+Fixes the `images.yml` Trivy gate (C9) for `ticket-mcp-server-python`: Debian `libzstd1` CVE-2026-124851 (HIGH), fixed in `1.5.7+dfsg-1+deb13u1`, newer than the `python:3.12-slim` base image.
 
-- `MigrationUserConfig`: when `TICKETS_DB_MIGRATION_USER`/`_PASSWORD` (K8) are set, Flyway connects as that user (DDL, owns the tables and `ticket_number_seq`). After every migrate on PostgreSQL it grants the application user (`TICKETS_DB_USER`) `SELECT, INSERT, UPDATE, DELETE` on all tables except `flyway_schema_history`, and `USAGE, SELECT` on all sequences (so `createTicket` can call `nextval`, but cannot `setval`). Without a migration user (e.g. `local` on H2) nothing changes.
-- `TicketsDatabaseUrlGuard`: in `prod`, a migration user is required and must differ from the app user; startup fails before any DB access otherwise.
-- `DatabaseTimeoutsConfig` + `application.properties`: Hikari `maximum-pool-size=${TICKETS_DB_POOL_SIZE:5}`, `connection-timeout=5000`, `validation-timeout=2000`; for `jdbc:postgresql:` URLs every pooled connection gets `statement_timeout` from `TICKETS_DB_STATEMENT_TIMEOUT` (default `5s`, `0` = off) plus a driver `socketTimeout` 10 s longer. An `options` setting already in the URL wins. Flyway with its own user connects outside the pool, so long migrations are not cut off.
-- Tests: `LeastPrivilegeTests` (prod profile on Testcontainers `postgres:17-alpine` with `tickets_migrator`/`tickets_app` roles from `least-privilege-roles.sql`): app user runs every tool, migrator owns tables and sequence, app user cannot CREATE/DROP/ALTER/TRUNCATE, read Flyway history or `setval`; pool size, connection timeout and a cancelled `pg_sleep`. `DatabaseTimeoutsTests` (unit). `DatabaseProfileTests`: prod needs a distinct migration user; the prod-on-PostgreSQL test now uses the two roles.
-- Verified: `./mvnw -pl ticket-mcp-server-java -am verify` green (77 tests, coverage, format). Contract suite: 65 passed against the jar (`local` profile, H2).
-
-**Needs from stream C**
-- Compose (C8): when the tickets DB is PostgreSQL, optionally a separate migration role; with the `local` profile `TICKETS_DB_MIGRATION_USER` may stay unset. New optional env vars: `TICKETS_DB_POOL_SIZE`, `TICKETS_DB_STATEMENT_TIMEOUT`.
-- Helm (C11a/C11b): `TICKETS_DB_MIGRATION_USER`/`_PASSWORD` (required in prod) from a Secret; a DBA creates the two roles once: `CREATE ROLE tickets_migrator LOGIN ...; CREATE ROLE tickets_app LOGIN ...; GRANT CREATE, USAGE ON SCHEMA public TO tickets_migrator; REVOKE CREATE ON SCHEMA public FROM PUBLIC;`. Operators inserting customers should use the migrator (or a DBA role); the app role can INSERT too.
-
-**README / docs needs (C14/C15)**
-- Runbook: ticket DB users (migrator = DDL, app = DML + sequence usage), the role setup above, and the timeout env vars.
+- `ticket-mcp-server-python/Dockerfile`: the runtime stage runs `apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*` before creating the non-root user, so Debian security fixes published after the base image are picked up on every build. Still runs as uid 10001, no apt lists left in the image.
+- Verified: image built locally; Trivy (`--scanners vuln --pkg-types os,library --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --ignorefile .github/trivyignore.yaml`) exits 0, `libzstd1 1.5.7+dfsg-1+deb13u1` installed. `ruff check`, `ruff format --check`, `pytest` (26 passed). Contract suite against the container: 65 passed.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
-### Branch `prod/b9-mcp-service-token` (base: `prod/b8-ticket-db-users`)
+### Branch `prod/b9-mcp-service-token` (base: `main`) – HELD by the user until A14 merges
 **PR title:** MCP servers: service token and Origin check per K5 (B9)
 
 **PR body:**
 Implements B9 / T3.4 (server side) of PRODUCTION_READINESS_PLAN.md, contract K5.
 
-**Stacked on #<B8 PR> (`prod/b8-ticket-db-users`)**, because both change the ticket server's `application*.properties` and its prod-profile tests. Merge B8 first; this PR's diff then shrinks to B9 only.
+B8 (which this branch was stacked on) is merged, so the PR diff against `main` is B9 only.
 
 - Java (ticket server and request log): `McpServiceAuthConfig` registers a servlet filter (highest precedence) on every path except `/actuator/**`:
   - `Origin` header present and not in `MCP_ALLOWED_ORIGINS` (comma-separated, empty by default) → 403. Applies even without a token (DNS-rebinding protection); server-to-server clients send no `Origin`.
@@ -57,18 +47,51 @@ Implements B9 / T3.4 (server side) of PRODUCTION_READINESS_PLAN.md, contract K5.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
+### Branch `prod/b11-observability` (base: `prod/b9-mcp-service-token`)
+**PR title:** MCP servers: JSON logs, tracing and /actuator/prometheus (B11)
+
+**PR body:**
+Implements B11 / T4.1, T4.2, T4.3 of PRODUCTION_READINESS_PLAN.md for the MCP servers.
+
+**Stacked on the B9 PR (`prod/b9-mcp-service-token`)**, because both change the Java servers' `application*.properties`, `McpServiceAuthConfig` and `LeastPrivilegeTests`, and the Python `server.py`. It must merge **after B9** (which is held until A14 merges); open it with base `prod/b9-mcp-service-token`, or with base `main` once B9 is merged.
+
+- Java (ticket server and request log): `micrometer-registry-prometheus`, `micrometer-tracing-bridge-otel` and `opentelemetry-exporter-otlp` (versions from the Boot BOM).
+  - Metrics (T4.3, K7, K9): `/actuator/prometheus` is exposed on the **app port** (8081/8082) next to the probes, as K7 says (no token, like all of `/actuator/**`; the NetworkPolicy keeps it internal). `http_server_requests_seconds` with histogram buckets (p95/p99 alerts), `hikaricp_*`, `jvm_*`, `requestlog_purged_rows_total`; every series is tagged `application=<server name>`. Setting `MANAGEMENT_SERVER_PORT` (standard Spring Boot) moves `/actuator/**` to its own port instead, if Helm prefers that, without changing K7's default.
+  - Tracing (T4.2, K8): incoming W3C `traceparent` headers are continued; `traceId`/`spanId` are in the MDC. Sampling from `TRACING_SAMPLING_PROBABILITY` (default 0.1). `OtlpTracingConfig` exports spans over OTLP/HTTP only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set and not blank, using the OpenTelemetry convention (collector base URL, `/v1/traces` appended). Boot's own `management.otlp.tracing.endpoint` would export even with an empty value.
+  - JSON logs (T4.1): `logging.structured.format.console=ecs` in the `prod` profile (ECS, one object per line, MDC incl. `traceId`). No tool arguments or results (questions, answers) are logged.
+  - `McpServiceAuthConfig` (B9): the filter order moves from `HIGHEST_PRECEDENCE` to `HIGHEST_PRECEDENCE + 2`, right after Spring's `ServerHttpObservationFilter`, so rejected requests (401/403) show up in `http_server_requests_seconds{status="401"}` and in traces.
+  - Tests: `ObservabilityTests` (running server: prometheus without a token, 401 counted, Hikari and application tag, purge counter; a given `traceparent` ends up as the exported span's trace id), `OtlpTracingConfigTests` (no/blank endpoint → no exporter; endpoint → `…/v1/traces`), `LeastPrivilegeTests.prodLogsAreJson`.
+- Python: `LOG_FORMAT=json` (default `text`) makes the server log ECS-shaped JSON lines (`@timestamp`, `log.level`, `log.logger`, `message`, `service.name`, `error.*`) on stdout, uvicorn's loggers included; an unknown value fails at startup. Standard library only, no new dependency. The unused module-level `app` is gone, so `main()` configures logging before building the app. Python has no Prometheus endpoint or tracing (in-memory demo implementation); see notes.
+- Verified: `./mvnw -pl request-log-mcp-server,ticket-mcp-server-java -am verify` green (92 + 70 tests, coverage, format). Python: ruff check/format + 38 tests. Contract suite: Java jar (local profile, ECS logs on) 67 passed, 1 skipped; Python server with `LOG_FORMAT=json` 67 passed, 1 skipped (the skip is the token test, no token set).
+
+**Needs from stream A**
+- A17: propagate `traceparent` on the MCP HTTP transport (the servers continue it), and use the same `TRACING_SAMPLING_PROBABILITY`/`OTEL_EXPORTER_OTLP_ENDPOINT` semantics.
+- A19: MCP panels can use `http_server_requests_seconds{application="ticket-mcp-server-java"|"request-log-mcp-server"}`, `hikaricp_connections_*{application=…}` and `requestlog_purged_rows_total`. Rejected MCP calls are `status="401"`/`"403"` with `uri="UNKNOWN"`.
+
+**Needs from stream C**
+- Helm (C11a/b): scrape `/actuator/prometheus` on 8081/8082 (or on `MANAGEMENT_SERVER_PORT` if set); env `OTEL_EXPORTER_OTLP_ENDPOINT`, `TRACING_SAMPLING_PROBABILITY`; `LOG_FORMAT=json` for the Python server if it is deployed.
+- Compose (optional): nothing required; `LOG_FORMAT=json` is not needed locally.
+
+**README / docs needs (C14/C15)**
+- Runbook: MCP server metrics, the env vars above, JSON log fields.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
 ## In progress
 none
 
 ## Next task
-B10 [L] – dependencies satisfied: needs coordination with A15 (S2: merge B10, then A15 right after). Can be developed now on its own branch. If B10 is not wanted yet, B11 (no ⛓) is next.
+B10 [L] – dependencies satisfied: needs coordination with A15 (S2: merge B10, then A15 right after). Can be developed now on its own branch (stack on `prod/b11-observability` or `prod/b9-mcp-service-token` if those are still unmerged; they touch the same properties files and `server.py`). Otherwise B12 (stack the same way).
 
 ## Blocked on
-nothing
+nothing (B9 and B11 are held only for merge order: B9 waits for A14, B11 for B9)
 
 ## Notes for the next session
-- B9 is stacked on B8. If B8 is merged first, rebase or just merge `main` into B9 before the user opens its PR.
+- Branch order: `prod/b-py-image-patch` (independent, from main) · `prod/b9-mcp-service-token` (from main, held until A14) · `prod/b11-observability` (stacked on B9).
+- Spring Boot tests switch Prometheus and tracing off unless the test has `@AutoConfigureObservability` (see `ObservabilityTests`).
+- Rejected requests have `uri="UNKNOWN"` in metrics because the auth filter answers before handler mapping.
+- Python Prometheus/tracing were left out of B11: the Python server is an in-memory demo store; if it is deployed, add `prometheus-client` (`/actuator/prometheus`) and OTel ASGI middleware as a follow-up.
+- Trivy locally: `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v <dir with trivyignore.yaml>:/cfg:ro -v helpdesk-trivy-cache:/root/.cache aquasec/trivy:latest image --scanners vuln --pkg-types os,library --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --ignorefile /cfg/trivyignore.yaml <image>`.
 - No local Rust toolchain: run Rust checks in Docker, e.g. `docker run --rm -v "$PWD":/src -v helpdesk-cargo-registry:/usr/local/cargo/registry -w /src -e CARGO_TARGET_DIR=/tmp/target rust:1-slim-trixie sh -c "rustup component add rustfmt clippy && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked"` from `ticket-mcp-server-rust`.
-- Contract tests on port 18081 (8081 is the user's compose stack): Java `java -jar ticket-mcp-server-java/target/ticket-mcp-server-java-*.jar --server.port=18081 --spring.profiles.active=local`, Python `PORT=18081 uv run --project ticket-mcp-server-python ticket-server`, Rust `docker run -p 18081:8081 <image>`. Add `MCP_SERVICE_TOKEN=...` to both the server and `uv run pytest` to cover the token path. `uv run` for the Python server leaves the child process running after `kill`; free the port with `lsof -ti tcp:18081 | xargs kill`.
-- The ticket server's prod tests (`LeastPrivilegeTests`, `DatabaseProfileTests`) now also need `MCP_SERVICE_TOKEN` (after B9).
+- Contract tests on port 18081 (8081 is the user's compose stack): Java `java -jar ticket-mcp-server-java/target/ticket-mcp-server-java-*.jar --server.port=18081 --spring.profiles.active=local`, Python `PORT=18081 uv run --project ticket-mcp-server-python ticket-server`. Add `MCP_SERVICE_TOKEN=...` to both the server and `uv run pytest` to cover the token path. Free the port afterwards with `lsof -ti tcp:18081 | xargs kill`.
 - B10: the auth filters cover every path except `/actuator/**`, so the new `/mcp` endpoint is covered automatically; the contract tests' raw-transport test and `test_browser_origin_is_rejected` post to `/mcp/message` and need updating for Streamable HTTP.
