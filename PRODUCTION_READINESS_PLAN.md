@@ -264,7 +264,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **A5** (T1.1) Spring Security resource server: deny by default, security headers. The API key remains only in the `local` profile.
 - [x] **A6** (T1.2) Map the JWT to a principal (roles, allowed customers) per K1.
 - [x] **A7** (T1.3) Endpoint authorization per K3.
-- [ ] **A8** **[L]** (T1.4) `CustomerScopedToolCallback` using the ToolContext. Hide `listCustomers` from the model and stop sending the customer as user text.
+- [x] **A8** **[L]** (T1.4) `CustomerScopedToolCallback` using the ToolContext. Hide `listCustomers` from the model and stop sending the customer as user text.
 - [ ] **A9** (T1.5) Filter tools per request, so `createTicket` is offered only to users with `tickets-write`. Collect tool-call audit records.
 - [ ] **A10** (T1.5, T1.6, client side) Send `userSubject` and `toolCalls` per K4. ⛓ B3.
 - [ ] **A11** (T1.8) Per-user rate limit with Bucket4j (`RATE_LIMIT_ASKS_PER_MINUTE`).
@@ -286,7 +286,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **B5** (T2.4) Retention purge job with ShedLock and the `requestlog_purged_rows_total` metric.
 - [x] **B6** (T2.6) Hikari and statement timeouts for the request log.
 - [x] **B7** **[L]** (T2.1) Postgres-backed `TicketTools`: Flyway schema, sequence-based ids, demo seed only in `local`. Add Testcontainers tests; the contract tests must still pass. ⛓ C8 for compose (until then, use Testcontainers).
-- [ ] **B8** (T2.3, T2.6) Least-privilege DB users and timeouts for the ticket server.
+- [x] **B8** (T2.3, T2.6) Least-privilege DB users and timeouts for the ticket server.
 - [ ] **B9** (T3.4, server side) Service-token filter and Origin check per K5 on both Java servers and the Python server (and Rust, if it is kept).
 - [ ] **B10** **[L]** (T3.1, server side) Streamable HTTP on the Java and Python servers. Rust stays on SSE (D2). Make the contract tests transport-selectable, update the `contract` CI job (Rust runs with `sse`) and `.mcp.json`, and write `ticket-mcp-server-rust/README.md` documenting its legacy status. ⛓ merges together with A15 (S2).
 - [ ] **B11** (T4.1, T4.2, T4.3) For the MCP servers: JSON logs in `prod`, tracing, and `/actuator/prometheus`.
@@ -305,7 +305,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **C5** (T4.6, T6.7 prep) `build-info` and git-commit-id in the root `pom.xml`; `${revision}` versioning.
 - [x] **C6** (T1.10) Keycloak in compose, with `deploy/keycloak/realm-helpdesk.json` per K1 (users `acme-agent`, `globex-agent`, `acme-writer`, `admin`).
 - [x] **C7** **[L]** (T1.7) oauth2-proxy in compose, nginx forwarding `Authorization` per K2, UI redirect to sign-in on 401, user menu and logout, API-key wording removed. ⛓ the end-to-end check needs A5–A7; the UI part can be built against K2/K3 first.
-- [ ] **C8** (T5.9) Compose: pin image tags and digests (Ollama, Postgres, nginx, Keycloak), add a tickets database and the env vars from K5/K8. Label the `rust` profile as legacy (D2).
+- [x] **C8** (T5.9) Compose: pin image tags and digests (Ollama, Postgres, nginx, Keycloak), add a tickets database and the env vars from K5/K8. Label the `rust` profile as legacy (D2).
 - [ ] **C9** (T6.2) Image build and push to GHCR, Trivy scan, CycloneDX SBOM, cosign signing.
 - [ ] **C10** (T3.5, image side) Bake the ONNX model and tokenizer into the assistant image at the paths from K8. ⛓ A16.
 - [ ] **C11a** **[L]** (T5.1, T5.2, T5.3) Helm chart skeleton covering all services, probes per K7, resources, PDB/HPA, values for staging and prod, and `helm lint` plus `kubeconform` in CI.
