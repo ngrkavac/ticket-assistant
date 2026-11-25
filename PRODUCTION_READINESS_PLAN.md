@@ -306,7 +306,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **C6** (T1.10) Keycloak in compose, with `deploy/keycloak/realm-helpdesk.json` per K1 (users `acme-agent`, `globex-agent`, `acme-writer`, `admin`).
 - [x] **C7** **[L]** (T1.7) oauth2-proxy in compose, nginx forwarding `Authorization` per K2, UI redirect to sign-in on 401, user menu and logout, API-key wording removed. ⛓ the end-to-end check needs A5–A7; the UI part can be built against K2/K3 first.
 - [x] **C8** (T5.9) Compose: pin image tags and digests (Ollama, Postgres, nginx, Keycloak), add a tickets database and the env vars from K5/K8. Label the `rust` profile as legacy (D2).
-- [ ] **C9** (T6.2) Image build and push to GHCR, Trivy scan, CycloneDX SBOM, cosign signing.
+- [x] **C9** (T6.2) Image build and push to GHCR, Trivy scan, CycloneDX SBOM, cosign signing.
 - [ ] **C10** (T3.5, image side) Bake the ONNX model and tokenizer into the assistant image at the paths from K8. ⛓ A16.
 - [ ] **C11a** **[L]** (T5.1, T5.2, T5.3) Helm chart skeleton covering all services, probes per K7, resources, PDB/HPA, values for staging and prod, and `helm lint` plus `kubeconform` in CI.
 - [ ] **C11b** **[L]** (T5.4–T5.7) Security contexts, ServiceAccounts, NetworkPolicies, Ingress with TLS and security headers, External Secrets.
