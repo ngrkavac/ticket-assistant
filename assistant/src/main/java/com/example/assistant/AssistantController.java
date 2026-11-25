@@ -40,7 +40,8 @@ class AssistantController {
       throw new QuestionTooLongException(props.maxQuestionLength());
     }
     // checked before the ticket server is asked, so callers cannot probe which customers exist
-    HelpdeskPrincipal.require(authentication).requireAccess(q.customer());
-    return new Answer(service.ask(q.question(), tickets.requireKnown(q.customer())));
+    HelpdeskPrincipal principal = HelpdeskPrincipal.require(authentication);
+    principal.requireAccess(q.customer());
+    return new Answer(service.ask(q.question(), tickets.requireKnown(q.customer()), principal));
   }
 }

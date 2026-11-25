@@ -3,9 +3,16 @@ package com.example.assistant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.modelcontextprotocol.spec.McpSchema;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.mcp.McpConnectionInfo;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.execution.ToolExecutionException;
+import org.springframework.ai.tool.function.FunctionToolCallback;
 
 class ChatConfigTests {
 
@@ -19,6 +26,52 @@ class ChatConfigTests {
   void toolFailureIsReturnedToTheModel() {
     var processor = new ChatConfig().toolExecutionExceptionProcessor(false);
     assertThat(processor.process(failure())).contains("Ticket T-1234 not found");
+  }
+
+  @Test
+  void everyOfferedToolIsCustomerScopedAndToolsWithoutCustomerAreDropped() {
+    ToolCallback getTicket =
+        FunctionToolCallback.builder("getTicket", (Map<String, String> in) -> "t")
+            .inputType(Map.class)
+            .inputSchema("{\"type\":\"object\",\"properties\":{\"customer\":{},\"id\":{}}}")
+            .build();
+    ToolCallback ping =
+        FunctionToolCallback.builder("ping", (Map<String, String> in) -> "pong")
+            .inputType(Map.class)
+            .inputSchema("{\"type\":\"object\",\"properties\":{}}")
+            .build();
+    ToolCallbackProvider provider =
+        ChatConfig.customerScoped(
+            () -> new ToolCallback[] {getTicket, ping}, new SimpleMeterRegistry());
+
+    ToolCallback[] offered = provider.getToolCallbacks();
+    assertThat(offered).hasSize(1);
+    assertThat(offered[0]).isInstanceOf(CustomerScopedToolCallback.class);
+    assertThat(offered[0].getToolDefinition().name()).isEqualTo("getTicket");
+  }
+
+  @Test
+  void listCustomersIsHiddenFromTheModel() {
+    HelpdeskProperties props =
+        new HelpdeskProperties(
+            null,
+            null,
+            null,
+            new HelpdeskProperties.RequestLog(true, null, 0, 0),
+            0,
+            1,
+            0,
+            null,
+            null,
+            null);
+    var filter = new ChatConfig().hideInternalTools(props);
+    var tickets =
+        McpConnectionInfo.builder()
+            .clientInfo(new McpSchema.Implementation("client - tickets", "tickets", "1.0.0"))
+            .build();
+    assertThat(filter.test(tickets, McpSchema.Tool.builder().name("listCustomers").build()))
+        .isFalse();
+    assertThat(filter.test(tickets, McpSchema.Tool.builder().name("getTicket").build())).isTrue();
   }
 
   @Test
