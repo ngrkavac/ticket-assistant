@@ -57,7 +57,9 @@ class McpServiceAuthConfig {
     }
     var registration =
         new FilterRegistrationBean<>(new ServiceAuthFilter(token, parseOrigins(allowedOrigins)));
-    registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
+    // Right after Spring's ServerHttpObservationFilter (HIGHEST_PRECEDENCE + 1), so rejected
+    // requests (401/403) still show up in http_server_requests_seconds and in traces.
+    registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 2);
     return registration;
   }
 
