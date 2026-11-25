@@ -9,7 +9,12 @@ COPY src src
 RUN uv sync --locked --no-dev --no-editable
 
 FROM python:3.12-slim
-RUN useradd --system --uid 10001 app
+# Pull Debian security fixes that are newer than the base image (e.g. libzstd1 CVE-2026-124851),
+# so the Trivy gate in images.yml (HIGH/CRITICAL, fixed only) passes between base image rebuilds.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 app
 COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1
 USER 10001
