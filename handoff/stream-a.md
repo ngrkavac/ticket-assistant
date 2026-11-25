@@ -1,25 +1,24 @@
 # Stream a handoff – 2026-11-25
 ## Done this session
-- A7 – `prod/a7-endpoint-authz` (base `main` d704c75)
+- A8 [L] – `prod/a8-customer-scoped-tools` (base `main` 4dc972d)
 
 ## Ready to push
-### `prod/a7-endpoint-authz` (base: `main`)
-**PR title:** Authorize endpoints by role and customer per K3 (A7)
+### `prod/a8-customer-scoped-tools` (base: `main`)
+**PR title:** Scope ticket tools to the request's customer via the ToolContext (A8)
 
 **PR body:**
-Stream A, task A7 (T1.3). Implements contract K3 on the assistant side.
+Stream A, task A8 (T1.4, server-side tool scoping).
 
-- `SecurityConfig`: `POST /ask` needs `helpdesk-agent`. `POST /questions` needs `helpdesk-admin`. Every other endpoint on the app port (the reads, plus endpoints added later) needs `helpdesk-agent` or `helpdesk-admin`. A valid token without a helpdesk role now gets a 403 problem instead of reaching the controllers. Actuator on the management port is unchanged.
-- `POST /ask`: `customer` is now **required** (400 if missing or blank). A customer that is not in the token gets a 403 with `detail: "Not allowed for this customer"`. This check runs before the ticket server is asked, so callers cannot probe which customers exist. An allowed but unknown customer still gets a 400. The response stays `{answer}`.
-- `GET /customers` returns only the customers in the token, or all of them for `customers: ["*"]`.
-- `GET /requests?customer=` gets the same 403 check. Leaving out `customer` (all customers) is allowed only for users with `customers: ["*"]`.
-- New `CustomerNotAllowedException` (an `AccessDeniedException`) and `HelpdeskPrincipal.require(..)`/`requireAccess(..)`. `ApiExceptionHandler` maps both to 403 problems instead of the catch-all 500.
-- The `local` profile is unchanged: the local user has every role and every customer.
-- Tests: a new `TestUsers` helper authenticates MockMvc requests with a real `HelpdeskPrincipal`. There are new role and customer cases for every endpoint, real signed-token cases in `SecurityConfigTests`, and a cross-customer 403 in `AssistantIntegrationTests`. The full endpoint × role × customer matrix is A12.
+- New `CustomerScopedToolCallback` wraps every ticket tool the model can call (`ChatConfig.customerScoped`). It reads the request's customer and the `HelpdeskPrincipal` from the Spring AI `ToolContext`, never from the model. The model's `customer` argument is filled in when missing or blank and normalized when it matches. Any other value gets the tool error `Not allowed for this customer`, a WARN log (the model's value is sanitized and truncated) and `helpdesk_tool_denied_total{tool}` (K9). The ticket server is not called in that case.
+- Fails closed: a call with no customer in the tool context, no principal, or a principal that may not act for that customer is refused the same way. Tools without a `customer` argument are not offered to the model at all.
+- The tool context is **not** forwarded to the MCP call. Spring AI's default converter would otherwise copy it, including the principal, into the request's `_meta`.
+- `listCustomers` is hidden from the model (the `McpToolFilter` bean is now `hideInternalTools`). `TicketDirectoryClient` still calls it directly for `/customers` and the `/ask` check.
+- `AssistantService.ask(question, customer, principal)`: the user text is now the question as typed. The `Customer: <name>` line is gone. The customer is a `{customer}` parameter of the system prompt and is in the tool context together with the principal. Customer and principal are required. `AssistantController` passes the principal through.
+- System prompt rewritten: the assistant works only for `{customer}`, always passes that customer to the ticket tools, never asks for it, and declines questions about other customers' tickets.
+- Tests: `CustomerScopedToolCallbackTests` (fill in, normalize, deny plus the metric, no context or principal, admin, context not forwarded, invalid JSON, schema check), `ChatConfigTests` (wrapping/dropping, `listCustomers` hidden), `AssistantServiceTests` now use a real `ChatClient` over a fake model to check the user text, the rendered system prompt and the tool context. There is also a new `AssistantIntegrationTests` case. 143 tests, coverage gate met.
+- No contract change: K3 is unchanged and `helpdesk_tool_denied_total{tool}` is the name from K9. The full cross-customer tool-call test with a fake tool-calling model is A12.
 
-`OIDC_JWK_SET_URI` (asked for in the C6 PR) already shipped with A5, so this PR needs no K8 change.
-
-**Needs from stream C (UI, C7):** the UI already sends `customer` on every `/ask` and shows the problem `detail` on errors, so nothing breaks. Nice to have: hide or disable "add question" for users without `helpdesk-admin` (it now returns 403), and treat a 403 on `/ask` as "not allowed for this customer" rather than a generic failure.
+**Needs from stream C (docs):** `HOW_IT_WORKS.md` (line ~100: "`AssistantService` then sends `Customer: <name>`…", the tool table at ~123 and the example at ~160 that uses `listCustomers` through the model) and `README.md` (line ~108: "The model receives `Customer: <name>` in front of the question") describe the old behaviour. The customer now reaches the model only through the system prompt and the tool context, every ticket tool call is limited to it, and `listCustomers` is no longer offered to the model.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -27,15 +26,15 @@ Stream A, task A7 (T1.3). Implements contract K3 on the assistant side.
 none
 
 ## Next task
-A8 [L] – dependencies satisfied: yes. A8 is [L], so it needs a session of its own. If A7 is not merged yet, branch A8 from `prod/a7-endpoint-authz`, because both touch `AssistantController`/`AssistantService`.
+A9 (T1.5: offer `createTicket` only with `tickets-write`, plus tool-call audit records) – dependencies satisfied: yes (no ⛓). If A8 is not merged yet, branch A9 from `prod/a8-customer-scoped-tools`, because both touch `ChatConfig`/`AssistantService`/`CustomerScopedToolCallback`.
 
 ## Blocked on
 nothing
 
 ## Notes for the next session
-- Authorization layout: role rules live in `SecurityConfig.api()` (URL + method). Customer checks happen in the controllers through `HelpdeskPrincipal.require(authentication).requireAccess(customer)`, which throws `CustomerNotAllowedException` (403, detail "Not allowed for this customer").
-- Tests: use `TestUsers.agent("acme")`, `TestUsers.admin()` (agent+admin, all customers) or `TestUsers.user(roles, customers, all)` instead of `jwt()`. `jwt()` has no `HelpdeskPrincipal`, so controllers answer 403 "Access denied." to it. `SecurityConfigTests.acmeAgentToken()` gives a real signed token.
-- `AssistantIntegrationTests` now mocks `TicketDirectoryClient` (there is no MCP server there), which is useful for the A8/A12 cross-customer tool-call test.
-- `AssistantService.ask` still takes a nullable customer and puts it in the user text as `Customer: ...`. A8 removes that and passes it through the ToolContext instead. The customer is now always non-null when it comes from `/ask`.
-- The worktree sandbox rejects compound shell commands that mix heredocs with `cd`/git. Write edit scripts with the Write tool into the scratchpad and run them with `python3 <script>`.
-- Run `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant` before `./mvnw -pl assistant -am verify` (124 tests, green at the A7 commit).
+- Tool scoping lives in `CustomerScopedToolCallback`. The ToolContext keys are `CustomerScopedToolCallback.CUSTOMER` and `PRINCIPAL`. For T1.5 write gating (`createTicket` only with `tickets-write`), filter the offered tools per request. Note that `ChatConfig.customerScoped(..)` is a `defaultToolCallbacks` provider resolved per request but without request data, so per-principal filtering needs `chat.prompt().toolCallbacks(..)`/`toolNames(..)` in `AssistantService` or a check inside the callback using the principal from the ToolContext.
+- The system prompt is an ST template with the `{customer}` param (`ChatConfig.SYSTEM`/`CUSTOMER_PARAM`). Every prompt must set it, or rendering throws. Do not add other `{...}` to the system text unless you set it too.
+- `AssistantServiceTests` builds a real `ChatClient.builder(fakeModel).defaultSystem(ChatConfig.SYSTEM)`, so it is easy to inspect the `Prompt` (system text, `ToolCallingChatOptions.getToolContext()`).
+- Denied tool calls go back to the model as the text "Not allowed for this customer" via the existing `ToolExecutionExceptionProcessor` (which also logs WARN "Tool X failed").
+- The worktree sandbox rejects compound shell commands that mix `cd`/heredocs/git, and also any command containing the word `eval` (e.g. `ls eval`). Use plain separate commands and the Write tool for scripts.
+- Run `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant` before `./mvnw -pl assistant -am verify` (143 tests, green at the A8 commit).
