@@ -131,7 +131,7 @@ docker compose up -d --build
 docker compose ps        # all services should be "healthy"
 ```
 
-`.env` must define `REQUEST_LOG_DB_PASSWORD`, plus `COMPOSE_PROFILES=java` (or `python` / `rust`) to choose the ticket server implementation. The local `docker-compose.override.yml` publishes the MCP servers on `127.0.0.1:8081/8082` so Claude Code can connect. Postgres is never published. The override must use the new service names (`ticket-mcp-server-java`, `-python`, `-rust`); give the `127.0.0.1:8081:8081` port to all three, because only the active one is started.
+`.env` must define `REQUEST_LOG_DB_PASSWORD`, plus `COMPOSE_PROFILES=java` (or `python` / `rust`) to choose the ticket server implementation (`rust` is a legacy SSE reference). With `java`, the tickets live in the `tickets-db` PostgreSQL container (demo data on first start; `TICKETS_DB_PASSWORD` has a local-only default). The local `docker-compose.override.yml` publishes the MCP servers on `127.0.0.1:8081/8082` so Claude Code can connect. Neither PostgreSQL container is published. The override must use the new service names (`ticket-mcp-server-java`, `-python`, `-rust`); give the `127.0.0.1:8081:8081` port to all three, because only the active one is started.
 
 ### 2. Send a request
 

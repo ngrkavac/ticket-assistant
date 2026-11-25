@@ -1,5 +1,6 @@
 # Usage: docker build --build-arg MODULE=assistant -t helpdesk-assistant .
-FROM eclipse-temurin:21-jdk AS build
+# Base images are pinned to a version tag plus digest; Renovate updates both.
+FROM eclipse-temurin:21.0.13_9-jdk@sha256:db5cc6341a1d7bc40cdb51e1f0d9824f3bb2cc8107d29da421dc4df7d11f05f1 AS build
 WORKDIR /src
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
@@ -36,7 +37,7 @@ RUN --mount=type=cache,target=/m2cache,sharing=locked \
  && if [ "$count" -ne 1 ]; then echo "Expected exactly one jar in ${MODULE}/target, found $count: $jars" >&2; exit 1; fi \
  && java -Djarmode=tools -jar "$jars" extract --layers --destination /out
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21.0.13_9-jre@sha256:ca73b4d3961703d6d7830a4361f49ef0478f8f28b39defc07bb72f4cc7f834f6
 RUN useradd --system --uid 10001 app && mkdir /models && chown 10001 /models
 WORKDIR /app
 COPY --from=build /out/dependencies/ ./

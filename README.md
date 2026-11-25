@@ -5,7 +5,7 @@ an IT helpdesk assistant.
 
 | Module | Role |
 |---|---|
-| `ticket-mcp-server-java` / `-python` / `-rust` (port 8081) | **MCP server** exposing per-customer ticket tools `listCustomers`, `getTicket`, `listOpenTickets`, `listTickets` and `createTicket` (in-memory demo tickets for acme, globex and initech) over SSE. Three interchangeable implementations of the same contract; run one of them (see [Ticket server implementations](#ticket-server-implementations)) |
+| `ticket-mcp-server-java` / `-python` / `-rust` (port 8081) | **MCP server** exposing per-customer ticket tools `listCustomers`, `getTicket`, `listOpenTickets`, `listTickets` and `createTicket` (demo tickets for acme, globex and initech; the Java server stores them in PostgreSQL, Python and Rust in memory) over SSE. Three interchangeable implementations of the same contract; run one of them (see [Ticket server implementations](#ticket-server-implementations)) |
 | `request-log-mcp-server` (port 8082) | **MCP server** backed by a database (PostgreSQL in compose, in-memory H2 by default) that stores every `/ask` request. Tools: `logRequest`, `getRequest`, `listRecentRequests`, plus `listQuestions` / `addQuestion` for the UI's question list |
 | `assistant` (port 8080) | **MCP client** + **RAG**: markdown KB in `assistant/src/main/resources/kb` is embedded locally (ONNX, no API key) into an in-memory `SimpleVectorStore`; a local Ollama model (llama3.1, free) answers via `QuestionAnswerAdvisor` and can call the MCP tools |
 
@@ -44,7 +44,7 @@ The ticket MCP server exists in three languages. Each one is its own module with
 |---|---|---|---|
 | `ticket-mcp-server-java` | Spring AI (`@Tool` methods), Maven | `./mvnw -q -pl ticket-mcp-server-java spring-boot:run` | `./mvnw -pl ticket-mcp-server-java verify` |
 | `ticket-mcp-server-python` | MCP Python SDK (low-level server) + Starlette/uvicorn, uv | `cd ticket-mcp-server-python && uv run ticket-server` | `uv run pytest && uv run ruff check .` |
-| `ticket-mcp-server-rust` | axum + tokio, hand-written SSE transport, cargo | `cd ticket-mcp-server-rust && cargo run` | `cargo test && cargo clippy` |
+| `ticket-mcp-server-rust` (**legacy**, SSE reference only, never deployed) | axum + tokio, hand-written SSE transport, cargo | `cd ticket-mcp-server-rust && cargo run` | `cargo test && cargo clippy` |
 
 `ticket-mcp-contract-tests/` is a black-box test suite that every implementation must pass. It connects over SSE like the assistant does. Start any implementation on :8081, then run:
 
@@ -119,7 +119,7 @@ After every `/ask` that reaches the model, the assistant calls the `logRequest` 
 
 The request-log tools are filtered out of the model's tool list (`McpToolFilter` in `ChatConfig`), so users cannot read other users' questions or write fake entries through the chat. Read the log from any MCP client (e.g. MCP Inspector against `http://localhost:8082/sse`) with `getRequest` / `listRecentRequests` / `listQuestions`, or query the `request_log` and `question_catalog` tables directly. `addQuestion` is denied for Claude Code in `.claude/settings.json`, like `logRequest`. The schema is managed by Flyway (`request-log-mcp-server/src/main/resources/db/migration`).
 
-Config: `REQUEST_LOG_MCP_URL` (assistant, default `http://localhost:8082`), `REQUEST_LOG_ENABLED=false` to turn logging off (the connection is still opened at startup; remove `spring.ai.mcp.client.sse.connections.requestlog.url` to drop it entirely), and on the server `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD`.
+Config: `REQUEST_LOG_MCP_URL` (assistant, default `http://localhost:8082`), `REQUEST_LOG_ENABLED=false` to turn logging off (the connection is still opened at startup; remove `spring.ai.mcp.client.sse.connections.requestlog.url` to drop it entirely), and on the server `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD`, optionally `REQUEST_LOG_DB_MIGRATION_USER` / `REQUEST_LOG_DB_MIGRATION_PASSWORD` (a separate Flyway user; the app user then gets DML only) and `REQUEST_LOG_RETENTION` (default `P90D`).
 
 Add or edit `.md` files in `kb/` to change the knowledge base (re-indexed on each start). To use files outside the jar, set `KB_LOCATION` (`helpdesk.kb.location`), e.g. `KB_LOCATION='file:/data/kb/*.md'` with a mounted volume; no rebuild needed.
 
@@ -141,8 +141,8 @@ Java code follows [Google Java Style](https://google.github.io/styleguide/javagu
 | Prompt safety | System prompt treats user/ticket text as data; ticket tool inputs are validated |
 | Resilience | Virtual threads, max 8 concurrent LLM calls (`helpdesk.max-concurrent-requests`; extra requests get 429 + `Retry-After`), HTTP connect/read timeouts for the LLM, 20s MCP request timeout, graceful shutdown. LLM/MCP failures map to 503, our own bugs to 500. The assistant needs the MCP server reachable at startup (compose enforces ordering) |
 | Observability | Actuator on a separate management port (`9090`, not published in compose): `health` (liveness/readiness; readiness includes the KB-indexed check), `metrics`, `prometheus`; `X-Request-Id` header and request id in every log line; question text is never written to application logs (it is stored in the request-log database, see above) |
-| Config | Via env: `OLLAMA_URL`, `OLLAMA_MODEL`, `TICKETS_MCP_URL`, `REQUEST_LOG_MCP_URL`, `REQUEST_LOG_ENABLED`, `OIDC_ISSUER_URI`, `OIDC_AUDIENCE`, `OIDC_JWK_SET_URI`, `OIDC_ROLES_CLAIM`, `OIDC_CUSTOMERS_CLAIM`, `HELPDESK_API_KEY` (`local` profile only), `KB_LOCATION`, `MANAGEMENT_PORT`, `EMBEDDING_CACHE_DIR`; request-log server: `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD` |
-| Packaging | Multi-stage `Dockerfile` for the Java modules (layered jar, non-root user, `--build-arg MODULE=...`); `ticket-mcp-server-python/Dockerfile` and `ticket-mcp-server-rust/Dockerfile` (non-root); `ui/Dockerfile` (static build on unprivileged nginx with the API proxy); `docker-compose.yml` (Ollama, PostgreSQL, request log, assistant, web UI behind oauth2-proxy, Keycloak, and the ticket server chosen by profile); GitHub Actions CI (Maven, Python, Rust and a contract-test matrix over the three ticket servers) |
+| Config | Via env: `OLLAMA_URL`, `OLLAMA_MODEL`, `TICKETS_MCP_URL`, `REQUEST_LOG_MCP_URL`, `REQUEST_LOG_ENABLED`, `OIDC_ISSUER_URI`, `OIDC_AUDIENCE`, `OIDC_JWK_SET_URI`, `OIDC_ROLES_CLAIM`, `OIDC_CUSTOMERS_CLAIM`, `HELPDESK_API_KEY` (`local` profile only), `KB_LOCATION`, `MANAGEMENT_PORT`, `EMBEDDING_CACHE_DIR`; request-log server: `REQUEST_LOG_DB_URL`, `REQUEST_LOG_DB_USER`, `REQUEST_LOG_DB_PASSWORD`, `REQUEST_LOG_DB_MIGRATION_USER`, `REQUEST_LOG_DB_MIGRATION_PASSWORD`, `REQUEST_LOG_RETENTION`; Java ticket server: `TICKETS_DB_URL`, `TICKETS_DB_USER`, `TICKETS_DB_PASSWORD` (required outside the `local` profile) |
+| Packaging | Multi-stage `Dockerfile` for the Java modules (layered jar, non-root user, `--build-arg MODULE=...`); `ticket-mcp-server-python/Dockerfile` and `ticket-mcp-server-rust/Dockerfile` (non-root); `ui/Dockerfile` (static build on unprivileged nginx with the API proxy); `docker-compose.yml` (Ollama, PostgreSQL for the request log and the tickets, request log, assistant, web UI behind oauth2-proxy, Keycloak, and the ticket server chosen by profile); GitHub Actions CI (Maven, Python, Rust and a contract-test matrix over the three ticket servers) |
 | Embeddings | ONNX model is cached in `EMBEDDING_CACHE_DIR` (`/models` volume in compose), so restarts do not re-download it. The very first start still needs internet |
 | Tests | `./mvnw test`: tool validation, controller tests (auth, validation, error mapping) and a full-context integration test with fake models (KB indexing, retrieval, context reaching the prompt); no LLM needed. `./mvnw verify` also enforces 80% line coverage (JaCoCo, `*Application` classes excluded); report in `<module>/target/site/jacoco` |
 
@@ -155,7 +155,14 @@ open http://localhost:5173   # web UI: sign in as acme-agent / local-only-passwo
 
 For curl, get a token first (see "Local sign-in (Keycloak)"). The assistant is published on `127.0.0.1:8080` only.
 
-`COMPOSE_PROFILES` picks the ticket server: `java`, `python` or `rust`. Exactly one must be active, because the assistant needs a ticket server at startup. Put `COMPOSE_PROFILES=java` in `.env` to make it the default, and override it per run with `COMPOSE_PROFILES=rust docker compose up --build`. Each implementation answers to the network alias `ticket-mcp-server`. To switch a running stack, run `docker compose down` first so the old server stops.
+All images are pinned to a version tag plus digest (`docker-compose.yml`, `Dockerfile`, `ui/Dockerfile`), and Renovate updates them. Ollama pulls the fixed model tag `llama3.1:8b-instruct-q4_K_M` (the same model as `llama3.1`); change it for both `ollama-pull` and the assistant with `OLLAMA_MODEL`. Compose also sets the MCP service tokens `TICKETS_MCP_TOKEN` and `REQUEST_LOG_MCP_TOKEN` (local-only defaults); they take effect once the servers check them.
+
+`COMPOSE_PROFILES` picks the ticket server: `java`, `python` or `rust`. Exactly one must be active, because the assistant needs a ticket server at startup.
+
+- `java` (use this one): tickets in PostgreSQL, in the `tickets-db` service (database `tickets`, volume `ticketsdata`, not published). The server runs with `SPRING_PROFILES_ACTIVE=local`, so the demo customers and tickets are added on the first start. `TICKETS_DB_PASSWORD` defaults to the local-only `local-only-tickets-db-password`; set it before the volume is first created to use another one. `docker compose down -v` resets the tickets. Look at them with `docker compose exec tickets-db psql -U tickets -d tickets -c "SELECT id, customer, status, subject FROM ticket ORDER BY id;"`.
+- `python`: demo tickets in memory, lost on restart.
+- `rust`: **legacy** reference implementation (in memory, SSE transport only, never deployed). Once the assistant switches to Streamable HTTP it can no longer use this server; the profile is then only for running the contract tests and MCP Inspector against it.
+ Put `COMPOSE_PROFILES=java` in `.env` to make it the default, and override it per run with `COMPOSE_PROFILES=rust docker compose up --build`. Each implementation answers to the network alias `ticket-mcp-server`. To switch a running stack, run `docker compose down` first so the old server stops.
 
 ### Local sign-in (Keycloak)
 
@@ -196,4 +203,4 @@ In compose the assistant validates the tokens with `OIDC_ISSUER_URI=http://local
 
 The web UI signs in through oauth2-proxy with the `helpdesk-ui` client. oauth2-proxy skips OIDC discovery for the same reason: it sends the browser to `localhost:8180` to log in and calls `keycloak:8080` for the token, keys, user info and logout. Its local-only defaults: `HELPDESK_UI_CLIENT_SECRET` (shared with the realm) and `OAUTH2_PROXY_COOKIE_SECRET` (default `local-only-cookie-secret-32bytes`; it must be 16, 24 or 32 bytes). The realm only accepts the redirect URI `http://localhost:5173/oauth2/callback`, so open the UI on exactly that host and port.
 
-Known limits (deliberate for a demo): in-memory vector store re-indexed on each start, demo tickets in memory, no retention/purge for the request log (questions are kept indefinitely: add a cleanup job if they may contain personal data), no rate limiting or TLS (put a gateway/ingress in front), Docker setup not built or run here.
+Known limits (deliberate for a demo): in-memory vector store re-indexed on each start, no retention/purge for the request log (questions are kept indefinitely: add a cleanup job if they may contain personal data), no rate limiting or TLS (put a gateway/ingress in front), Docker setup not built or run here.
