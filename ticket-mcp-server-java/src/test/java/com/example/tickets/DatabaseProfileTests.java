@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -22,7 +24,8 @@ class DatabaseProfileTests {
   private static final String MISSING_URL = "TICKETS_DB_URL must be set";
 
   @Container
-  static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+  static final PostgreSQLContainer<?> POSTGRES =
+      new PostgreSQLContainer<>("postgres:17-alpine").withInitScript("least-privilege-roles.sql");
 
   private static ConfigurableApplicationContext start(String profile, String... args) {
     SpringApplicationBuilder app =
@@ -34,11 +37,14 @@ class DatabaseProfileTests {
     return app.run(args);
   }
 
+  /** PostgreSQL with separate migration and application users, as the prod profile requires. */
   private static String[] postgresArgs() {
     return new String[] {
       "--TICKETS_DB_URL=" + POSTGRES.getJdbcUrl(),
-      "--TICKETS_DB_USER=" + POSTGRES.getUsername(),
-      "--TICKETS_DB_PASSWORD=" + POSTGRES.getPassword()
+      "--TICKETS_DB_USER=tickets_app",
+      "--TICKETS_DB_PASSWORD=app-secret",
+      "--TICKETS_DB_MIGRATION_USER=tickets_migrator",
+      "--TICKETS_DB_MIGRATION_PASSWORD=migrator-secret"
     };
   }
 
@@ -70,6 +76,37 @@ class DatabaseProfileTests {
                     .close())
         .hasStackTraceContaining(
             "must be a jdbc:postgresql: URL in the prod profile, got jdbc:h2:");
+  }
+
+  @Test
+  void prodProfileRequiresASeparateMigrationUser() {
+    assertThatThrownBy(
+            () ->
+                start(
+                        "prod",
+                        "--TICKETS_DB_URL=" + POSTGRES.getJdbcUrl(),
+                        "--TICKETS_DB_USER=tickets_app",
+                        "--TICKETS_DB_PASSWORD=app-secret")
+                    .close())
+        .hasStackTraceContaining("TICKETS_DB_MIGRATION_USER and TICKETS_DB_MIGRATION_PASSWORD");
+    assertThatThrownBy(
+            () ->
+                start(
+                        "prod",
+                        "--TICKETS_DB_URL=" + POSTGRES.getJdbcUrl(),
+                        "--TICKETS_DB_USER=tickets_app",
+                        "--TICKETS_DB_PASSWORD=app-secret",
+                        "--TICKETS_DB_MIGRATION_USER=tickets_app")
+                    .close())
+        .hasStackTraceContaining("TICKETS_DB_MIGRATION_USER must differ from TICKETS_DB_USER");
+  }
+
+  @Test
+  void guardAcceptsADistinctMigrationUser() {
+    assertThatCode(() -> TicketsDatabaseUrlGuard.checkMigrationUser("tickets_migrator", "app"))
+        .doesNotThrowAnyException();
+    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.checkMigrationUser(" ", "app"))
+        .hasMessageContaining("must be set in the prod profile");
   }
 
   @Test
@@ -107,8 +144,9 @@ class DatabaseProfileTests {
           .hasMessage("Unknown customer acme");
 
       // An operator adds a customer; numbering starts at T-1001 without the seed.
-      context
-          .getBean(org.springframework.jdbc.core.simple.JdbcClient.class)
+      JdbcClient.create(
+              new DriverManagerDataSource(
+                  POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()))
           .sql("INSERT INTO customer (id) VALUES ('acme')")
           .update();
       assertThat(tools.createTicket("acme", "First real ticket", "HIGH"))
