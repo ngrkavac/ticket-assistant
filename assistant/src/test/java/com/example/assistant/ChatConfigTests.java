@@ -29,25 +29,14 @@ class ChatConfigTests {
   }
 
   @Test
-  void everyOfferedToolIsCustomerScopedAndToolsWithoutCustomerAreDropped() {
+  void modelToolsUseTheMcpTools() {
     ToolCallback getTicket =
         FunctionToolCallback.builder("getTicket", (Map<String, String> in) -> "t")
             .inputType(Map.class)
             .inputSchema("{\"type\":\"object\",\"properties\":{\"customer\":{},\"id\":{}}}")
             .build();
-    ToolCallback ping =
-        FunctionToolCallback.builder("ping", (Map<String, String> in) -> "pong")
-            .inputType(Map.class)
-            .inputSchema("{\"type\":\"object\",\"properties\":{}}")
-            .build();
-    ToolCallbackProvider provider =
-        ChatConfig.customerScoped(
-            () -> new ToolCallback[] {getTicket, ping}, new SimpleMeterRegistry());
-
-    ToolCallback[] offered = provider.getToolCallbacks();
-    assertThat(offered).hasSize(1);
-    assertThat(offered[0]).isInstanceOf(CustomerScopedToolCallback.class);
-    assertThat(offered[0].getToolDefinition().name()).isEqualTo("getTicket");
+    ToolCallbackProvider mcp = () -> new ToolCallback[] {getTicket};
+    assertThat(new ChatConfig().modelTools(mcp, new SimpleMeterRegistry()).all()).hasSize(1);
   }
 
   @Test

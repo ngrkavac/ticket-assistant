@@ -11,6 +11,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
@@ -26,8 +27,11 @@ import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 
 class AssistantServiceTests {
 
@@ -36,6 +40,43 @@ class AssistantServiceTests {
           "sub-1", "agent", Set.of(SecurityConfig.ROLE_AGENT), Set.of("acme"), false);
 
   private final RequestLogClient log = mock(RequestLogClient.class);
+
+  private static final HelpdeskPrincipal WRITER =
+      new HelpdeskPrincipal(
+          "sub-2",
+          "writer",
+          Set.of(SecurityConfig.ROLE_AGENT, SecurityConfig.ROLE_WRITER),
+          Set.of("acme"),
+          false);
+
+  private static final String SCHEMA =
+      "{\"type\":\"object\",\"properties\":{\"customer\":{\"type\":\"string\"}}}";
+
+  /** A ticket tool that returns {@code result} as an MCP tool would (raw text). */
+  private static ToolCallback fakeTool(String name, String result) {
+    ToolDefinition definition =
+        ToolDefinition.builder().name(name).description("d").inputSchema(SCHEMA).build();
+    return new ToolCallback() {
+      @Override
+      public ToolDefinition getToolDefinition() {
+        return definition;
+      }
+
+      @Override
+      public String call(String toolInput) {
+        return result;
+      }
+    };
+  }
+
+  private final ModelTools tools =
+      new ModelTools(
+          () ->
+              new ToolCallback[] {
+                fakeTool("getTicket", "{\"id\":\"T-1001\"}"),
+                fakeTool("createTicket", "{\"id\":\"T-1004\",\"customer\":\"acme\"}")
+              },
+          new SimpleMeterRegistry());
 
   /** Prompts the fake model was called with. */
   private final List<Prompt> prompts = new CopyOnWriteArrayList<>();
@@ -56,7 +97,7 @@ class AssistantServiceTests {
   }
 
   private AssistantService service(Function<String, String> answers, int maxConcurrent) {
-    return new AssistantService(chat(answers), props(maxConcurrent), log);
+    return new AssistantService(chat(answers), tools, props(maxConcurrent), log);
   }
 
   @Test
@@ -81,6 +122,65 @@ class AssistantServiceTests {
     assertThat(((ToolCallingChatOptions) prompt.getOptions()).getToolContext())
         .containsEntry(CustomerScopedToolCallback.CUSTOMER, "acme")
         .containsEntry(CustomerScopedToolCallback.PRINCIPAL, AGENT);
+  }
+
+  private static List<String> offeredTools(Prompt prompt) {
+    return ((ToolCallingChatOptions) prompt.getOptions())
+        .getToolCallbacks().stream().map(t -> t.getToolDefinition().name()).toList();
+  }
+
+  @Test
+  void createTicketIsOfferedOnlyToUsersWithTicketsWrite() {
+    service(q -> "ok", 1).ask("hi", "acme", AGENT);
+    service(q -> "ok", 1).ask("hi", "acme", WRITER);
+
+    assertThat(offeredTools(prompts.get(0))).containsExactly("getTicket");
+    assertThat(offeredTools(prompts.get(1))).containsExactly("getTicket", "createTicket");
+    assertThat(prompts.get(0).getContents()).contains("not allowed to create tickets");
+  }
+
+  @Test
+  void collectsTheToolCallsOfTheRequest() {
+    ChatModel model =
+        prompt -> {
+          prompts.add(prompt);
+          var options = (ToolCallingChatOptions) prompt.getOptions();
+          var context = new ToolContext(options.getToolContext());
+          for (ToolCallback tool : options.getToolCallbacks()) {
+            tool.call("{\"customer\":\"acme\"}", context);
+          }
+          return new ChatResponse(List.of(new Generation(new AssistantMessage("created"))));
+        };
+    ChatClient chat = ChatClient.builder(model).defaultSystem(ChatConfig.SYSTEM).build();
+
+    new AssistantService(chat, tools, props(1), log).ask("open a ticket", "acme", WRITER);
+
+    Object audit =
+        ((ToolCallingChatOptions) prompts.get(0).getOptions())
+            .getToolContext()
+            .get(CustomerScopedToolCallback.AUDIT);
+    assertThat(audit).isInstanceOf(ToolCallAudit.class);
+    assertThat(((ToolCallAudit) audit).toJson())
+        .isEqualTo(
+            "[{\"tool\":\"getTicket\",\"customer\":\"acme\",\"outcome\":\"success\"},"
+                + "{\"tool\":\"createTicket\",\"customer\":\"acme\",\"outcome\":\"success\","
+                + "\"resultId\":\"T-1004\"}]");
+  }
+
+  @Test
+  void eachRequestGetsItsOwnAudit() {
+    AssistantService service = service(q -> "ok", 1);
+    service.ask("a", "acme", AGENT);
+    service.ask("b", "acme", AGENT);
+    Object first =
+        ((ToolCallingChatOptions) prompts.get(0).getOptions())
+            .getToolContext()
+            .get(CustomerScopedToolCallback.AUDIT);
+    Object second =
+        ((ToolCallingChatOptions) prompts.get(1).getOptions())
+            .getToolContext()
+            .get(CustomerScopedToolCallback.AUDIT);
+    assertThat(first).isNotNull().isNotSameAs(second);
   }
 
   @Test
@@ -140,7 +240,7 @@ class AssistantServiceTests {
 
   @Test
   void interruptedWaitIsTreatedAsBusyAndKeepsInterruptFlag() {
-    AssistantService service = new AssistantService(mock(ChatClient.class), props(1), log);
+    AssistantService service = new AssistantService(mock(ChatClient.class), tools, props(1), log);
     Thread.currentThread().interrupt();
     try {
       assertThatThrownBy(() -> service.ask("x", "acme", AGENT))
@@ -179,7 +279,7 @@ class AssistantServiceTests {
 
   @Test
   void rejectedRequestIsNotRecorded() {
-    AssistantService service = new AssistantService(mock(ChatClient.class), props(1), log);
+    AssistantService service = new AssistantService(mock(ChatClient.class), tools, props(1), log);
     Thread.currentThread().interrupt();
     try {
       assertThatThrownBy(() -> service.ask("x", "acme", AGENT))
@@ -197,7 +297,7 @@ class AssistantServiceTests {
     var props =
         new HelpdeskProperties(
             null, null, null, null, 0, 1, 0, Duration.ZERO, Duration.ofSeconds(30), null);
-    AssistantService service = new AssistantService(chat(slow(started, finish)), props, log);
+    AssistantService service = new AssistantService(chat(slow(started, finish)), tools, props, log);
     Thread t = new Thread(() -> service.ask("slow", "acme", AGENT)); // takes the only slot
     t.start();
     started.await();
