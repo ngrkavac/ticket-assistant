@@ -1,0 +1,2 @@
+# Trivy exceptions for the Images workflow (.github/workflows/images.yml): one CVE id per line,
+# each with a comment saying why it is accepted and when to revisit it. Keep this list short.

@@ -1,0 +1,125 @@
+name: Images
+# Builds every deployable image, scans it with Trivy and makes a CycloneDX SBOM (T6.2).
+# Pull requests stop there. On main and on version tags the scanned image is pushed to GHCR,
+# signed with cosign (keyless, GitHub OIDC) and the SBOM is attached as a signed attestation.
+# The Rust ticket server is a legacy reference that is never deployed (D2), so it has no image here.
+on:
+  push: {branches: [main], tags: ["v*"]}
+  pull_request: {}
+# Least privilege for GITHUB_TOKEN; the image job asks for what pushing and signing need.
+permissions:
+  contents: read
+concurrency:
+  group: images-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Actions are pinned by commit SHA (tag in the comment); Renovate keeps both up to date.
+jobs:
+  image:
+    name: image (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io (only used on push events)
+      id-token: write   # cosign keyless signing via Sigstore (only used on push events)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {image: assistant, context: ., build-args: "MODULE=assistant"}
+          - {image: ticket-mcp-server-java, context: ., build-args: "MODULE=ticket-mcp-server-java"}
+          - {image: request-log-mcp-server, context: ., build-args: "MODULE=request-log-mcp-server"}
+          - {image: ticket-mcp-server-python, context: ticket-mcp-server-python, build-args: ""}
+          - {image: ui, context: ui, build-args: ""}
+    env:
+      PUBLISH: ${{ github.event_name == 'push' }}
+      MATRIX_IMAGE: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Image name
+        # GHCR names must be lower case: ghcr.io/<owner>/<repo>/<image>.
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/${MATRIX_IMAGE}" >> "$GITHUB_ENV"
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          # sha-<short> on every build; on a v1.2.3 tag also 1.2.3 and 1.2. No "latest":
+          # deployments pin a version or a digest.
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          flavor: latest=false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Build once and load it into the local Docker engine. The same image (same digest) is
+      # scanned, described by the SBOM, pushed and signed: nothing is rebuilt after the scan.
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          build-args: ${{ matrix.build-args }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          push: false
+          cache-from: type=gha,scope=image-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.image }}
+      - name: Image reference
+        env: {TAGS: "${{ steps.meta.outputs.tags }}"}
+        run: echo "IMAGE_REF=$(printf '%s\n' "$TAGS" | head -n 1)" >> "$GITHUB_ENV"
+      # Fails on HIGH or CRITICAL vulnerabilities that have a fix available (OS packages and
+      # application dependencies). Accepted exceptions go to .github/trivyignore with a reason.
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          trivyignores: .github/trivyignore
+      # CycloneDX SBOM of the whole image (OS packages, the Java dependencies inside the jar, the
+      # Python and npm packages), kept as a workflow artifact and, when published, attested below.
+      - name: SBOM
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+        with:
+          image: ${{ env.IMAGE_REF }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: sbom-${{ matrix.image }}.cdx.json
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        if: env.PUBLISH == 'true'
+        run: |
+          docker push --all-tags "$IMAGE"
+          digest_ref=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE_REF")
+          echo "DIGEST_REF=$digest_ref" >> "$GITHUB_ENV"
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+        if: env.PUBLISH == 'true'
+      # Keyless: the certificate names this workflow and commit. Verify with
+      #   cosign verify <image>@<digest> --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #     --certificate-identity-regexp '^https://github.com/<owner>/<repo>/.github/workflows/images.yml@'
+      - name: Sign and attest SBOM
+        if: env.PUBLISH == 'true'
+        run: |
+          cosign sign --yes "$DIGEST_REF"
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "$DIGEST_REF"
+      - name: Summary
+        if: env.PUBLISH == 'true'
+        env: {TAGS: "${{ steps.meta.outputs.tags }}"}
+        run: |
+          {
+            echo "### ${MATRIX_IMAGE}"
+            echo "Digest: \`${DIGEST_REF}\` (signed, CycloneDX SBOM attested)"
+            echo
+            echo "Tags:"
+            while IFS= read -r tag; do echo "- \`${tag}\`"; done <<< "$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"
