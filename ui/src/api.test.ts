@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ApiError, ask, listRequests } from './api';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, ask, browser, getUser, listRequests } from './api';
 import { json, mockFetch, problem } from './test/fetchMock';
 
 describe('api', () => {
@@ -32,12 +32,83 @@ describe('api', () => {
     await expect(ask('q', 'acme')).rejects.toMatchObject({ status: 502, message: 'Request failed (502).' });
   });
 
-  it('explains a 401', async () => {
-    mockFetch({ 'POST /ask': () => problem(401, 'Missing API key') });
+  describe('when the session is missing or expired (401)', () => {
+    let assign: ReturnType<typeof vi.spyOn>;
+    let now = 1_000_000;
+    beforeEach(() => {
+      assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+      vi.spyOn(browser, 'now').mockImplementation(() => now);
+      window.history.replaceState(null, '', '/?tab=history');
+    });
 
-    await expect(ask('q', 'acme')).rejects.toMatchObject({
-      status: 401,
-      message: 'Unauthorized: HELPDESK_API_KEY is not set for the UI server.',
+    it('redirects to sign-in and back to the current page', async () => {
+      mockFetch({ 'POST /ask': () => problem(401, 'Unauthorized') });
+
+      await expect(ask('q', 'acme')).rejects.toMatchObject({
+        status: 401,
+        message: 'Your session has expired. Taking you to sign-in…',
+      });
+      expect(assign).toHaveBeenCalledWith('/oauth2/sign_in?rd=%2F%3Ftab%3Dhistory');
+    });
+
+    it('does not redirect again within a minute, so a rejected session cannot loop', async () => {
+      mockFetch({ 'POST /ask': () => problem(401, 'Unauthorized') });
+      await ask('q', 'acme').catch(() => {});
+
+      now += 59_000;
+      await expect(ask('q', 'acme')).rejects.toMatchObject({
+        status: 401,
+        message: 'You are signed in, but the assistant did not accept the session. Try again later.',
+      });
+      expect(assign).toHaveBeenCalledTimes(1);
+
+      now += 2_000;
+      await ask('q', 'acme').catch(() => {});
+      expect(assign).toHaveBeenCalledTimes(2);
+    });
+
+    it('redirects when the user info needs a sign-in', async () => {
+      mockFetch({ 'GET /oauth2/userinfo': () => new Response('Unauthorized', { status: 401 }) });
+
+      await expect(getUser()).resolves.toBeNull();
+      expect(assign).toHaveBeenCalledWith('/oauth2/sign_in?rd=%2F%3Ftab%3Dhistory');
+    });
+  });
+
+  describe('getUser', () => {
+    it('maps the oauth2-proxy user info, with the roles from the groups', async () => {
+      mockFetch({
+        'GET /oauth2/userinfo': () =>
+          json({
+            user: '0b6f-uuid',
+            email: 'acme-agent@helpdesk.local',
+            preferredUsername: 'acme-agent',
+            groups: ['helpdesk-agent'],
+          }),
+      });
+
+      await expect(getUser()).resolves.toEqual({
+        name: 'acme-agent',
+        email: 'acme-agent@helpdesk.local',
+        roles: ['helpdesk-agent'],
+      });
+    });
+
+    it('falls back to the user id and no roles', async () => {
+      mockFetch({ 'GET /oauth2/userinfo': () => json({ user: 'someone' }) });
+
+      await expect(getUser()).resolves.toEqual({ name: 'someone', email: null, roles: [] });
+    });
+
+    it('is null without oauth2-proxy in front (dev server)', async () => {
+      mockFetch({ 'GET /oauth2/userinfo': () => new Response('<!doctype html>', { status: 200 }) });
+      await expect(getUser()).resolves.toBeNull();
+
+      mockFetch({ 'GET /oauth2/userinfo': () => new Response('Not found', { status: 404 }) });
+      await expect(getUser()).resolves.toBeNull();
+
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+      await expect(getUser()).resolves.toBeNull();
     });
   });
 });

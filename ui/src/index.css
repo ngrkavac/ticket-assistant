@@ -220,6 +220,126 @@ p {
   color: var(--color-text);
 }
 
+/* Signed-in user (oauth2-proxy) */
+.user-menu {
+  position: relative;
+  flex: none;
+}
+
+.user-menu__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px 0 4px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.user-menu__button::-webkit-details-marker {
+  display: none;
+}
+
+.user-menu__button:hover {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.user-menu__button:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.user-menu__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-soft-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.user-menu__name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu__panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.user-menu__who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.user-menu__label,
+.user-menu__email {
+  color: var(--color-text-muted);
+}
+
+.user-menu__label {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.user-menu__roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.user-menu__roles li {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.user-menu__sign-out {
+  width: 100%;
+}
+
 /* Hero */
 .hero {
   display: flex;
@@ -855,6 +975,14 @@ p {
 
   .site-header__nav {
     gap: 16px;
+  }
+
+  .user-menu__name {
+    display: none;
+  }
+
+  .user-menu__button {
+    padding-right: 4px;
   }
 
   .hero {

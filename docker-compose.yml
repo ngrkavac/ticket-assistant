@@ -1,4 +1,5 @@
 # COMPOSE_PROFILES=java docker compose up --build   (java | python | rust; first run pulls llama3.1, ~5 GB)
+# Then open http://localhost:5173 and sign in as a demo user (README, "Local sign-in (Keycloak)").
 services:
   ollama:
     image: ollama/ollama:latest
@@ -108,33 +109,83 @@ services:
       OLLAMA_URL: http://ollama:11434
       TICKETS_MCP_URL: http://ticket-mcp-server:8081
       REQUEST_LOG_MCP_URL: http://request-log-mcp-server:8082
-      # Since A5 the assistant needs OIDC_ISSUER_URI outside the `local` profile. Until C7 puts
-      # oauth2-proxy in front of the UI, compose keeps the API-key flow via the `local` profile.
-      SPRING_PROFILES_ACTIVE: local
-      HELPDESK_API_KEY: ${HELPDESK_API_KEY:?set HELPDESK_API_KEY}
+      # Every request needs a bearer access token from Keycloak (K1/K2). The tokens' issuer is the
+      # browser-facing URL, which is not reachable from this container, so the signing keys are
+      # fetched from Keycloak inside the compose network instead.
+      OIDC_ISSUER_URI: http://localhost:8180/realms/helpdesk
+      OIDC_JWK_SET_URI: http://keycloak:8080/realms/helpdesk/protocol/openid-connect/certs
+      OIDC_AUDIENCE: helpdesk-assistant
     volumes: [models:/models]   # caches the embedding model between restarts
-    ports: ["8080:8080"]   # management port 9090 is intentionally not published
+    # Loopback only, for curl with a token (README). The UI reaches it inside the network.
+    ports: ["127.0.0.1:8080:8080"]   # management port 9090 is intentionally not published
     healthcheck:
       test: ["CMD-SHELL", "curl -fs localhost:9090/actuator/health/readiness || exit 1"]
       interval: 15s
       start_period: 60s
       retries: 5
 
-  # Web UI: static build behind nginx, which proxies /ask and /requests to the assistant and adds
-  # the API key server-side. Published on loopback only: anyone who can reach the UI can use the
-  # assistant with that key.
+  # Web UI: static build behind nginx, which proxies /ask, /requests, /customers and /questions to
+  # the assistant with the user's access token as "Authorization: Bearer" (K2). Not published to
+  # the host: only oauth2-proxy may reach it, because nginx trusts the token header it receives.
   ui:
     build: ./ui
     depends_on:
       assistant: {condition: service_healthy}
     environment:
       ASSISTANT_URL: http://assistant:8080
-      HELPDESK_API_KEY: ${HELPDESK_API_KEY:?set HELPDESK_API_KEY}
-    ports: ["127.0.0.1:5173:8080"]   # http://localhost:5173, same URL as the Vite dev server
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
       interval: 10s
       retries: 5
+
+  # Sign-in in front of the UI (K2): signs users in at Keycloak (client helpdesk-ui, authorization
+  # code + PKCE), keeps the session in an encrypted cookie, refreshes the tokens and passes the
+  # access token to nginx. The browser never sees a token. The defaults are LOCAL ONLY.
+  # Keycloak's issuer is http://localhost:8180 (browser-facing), so discovery is skipped: the
+  # browser is sent to localhost:8180 to log in, while token, keys and logout calls go to
+  # keycloak:8080 inside the network.
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6
+    depends_on:
+      keycloak: {condition: service_healthy}
+      ui: {condition: service_healthy}
+    environment:
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_UPSTREAMS: http://ui:8080
+      OAUTH2_PROXY_PROVIDER: oidc
+      OAUTH2_PROXY_PROVIDER_DISPLAY_NAME: Keycloak
+      OAUTH2_PROXY_CLIENT_ID: helpdesk-ui
+      OAUTH2_PROXY_CLIENT_SECRET: ${HELPDESK_UI_CLIENT_SECRET:-local-only-client-secret}
+      OAUTH2_PROXY_CODE_CHALLENGE_METHOD: S256
+      OAUTH2_PROXY_REDIRECT_URL: http://localhost:5173/oauth2/callback
+      OAUTH2_PROXY_OIDC_ISSUER_URL: http://localhost:8180/realms/helpdesk
+      OAUTH2_PROXY_SKIP_OIDC_DISCOVERY: "true"
+      OAUTH2_PROXY_LOGIN_URL: http://localhost:8180/realms/helpdesk/protocol/openid-connect/auth
+      OAUTH2_PROXY_REDEEM_URL: http://keycloak:8080/realms/helpdesk/protocol/openid-connect/token
+      OAUTH2_PROXY_OIDC_JWKS_URL: http://keycloak:8080/realms/helpdesk/protocol/openid-connect/certs
+      OAUTH2_PROXY_PROFILE_URL: http://keycloak:8080/realms/helpdesk/protocol/openid-connect/userinfo
+      # Sign-out also ends the Keycloak session, so the next visit asks for the password again.
+      OAUTH2_PROXY_BACKEND_LOGOUT_URL: http://keycloak:8080/realms/helpdesk/protocol/openid-connect/logout?id_token_hint={id_token}
+      OAUTH2_PROXY_SCOPE: openid profile email
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # The UI shows these as the user's roles (/oauth2/userinfo "groups").
+      OAUTH2_PROXY_OIDC_GROUPS_CLAIM: roles
+      # K2: the access token (aud=helpdesk-assistant) goes upstream in X-Forwarded-Access-Token;
+      # nginx turns it into "Authorization: Bearer". (--pass-authorization-header would send the
+      # ID token, whose audience is helpdesk-ui.)
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      # Straight to the Keycloak login page; API calls without a session get 401 instead of a
+      # redirect, and the UI then reloads through /oauth2/sign_in.
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_API_ROUTES: ^/(ask|requests|customers|questions)$$
+      OAUTH2_PROXY_COOKIE_NAME: resolva_session
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:-local-only-cookie-secret-32bytes}
+      OAUTH2_PROXY_COOKIE_SECURE: "false"   # plain http on localhost; always true behind TLS
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      # Keycloak access tokens live 5 minutes: refresh them before they expire.
+      OAUTH2_PROXY_COOKIE_REFRESH: 4m
+      OAUTH2_PROXY_COOKIE_EXPIRE: 10h
+    ports: ["127.0.0.1:5173:4180"]   # http://localhost:5173, the redirect URI registered in the realm
 
 volumes:
   ollama:

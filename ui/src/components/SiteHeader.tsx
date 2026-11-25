@@ -1,7 +1,11 @@
+import type { User } from '../api';
 import { Logo } from './Logo';
 import { ThemeToggle } from './ThemeToggle';
+import { UserMenu } from './UserMenu';
 
-export function SiteHeader() {
+type Props = { user?: User | null };
+
+export function SiteHeader({ user = null }: Props) {
   return (
     <header className="site-header">
       <div className="site-header__inner">
@@ -13,6 +17,7 @@ export function SiteHeader() {
           <a href="#workspace">Workspace</a>
         </nav>
         <ThemeToggle />
+        {user && <UserMenu user={user} />}
       </div>
     </header>
   );

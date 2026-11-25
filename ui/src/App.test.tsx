@@ -1,8 +1,8 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import App from './App';
-import type { LoggedRequest } from './api';
+import { browser, type LoggedRequest } from './api';
 import { json, mockFetch, problem, type Handler } from './test/fetchMock';
 
 const QUESTIONS = [
@@ -15,6 +15,8 @@ function routes(overrides: Record<string, Handler> = {}): Record<string, Handler
     'GET /customers': () => json(['acme', 'globex']),
     'GET /questions': () => json(QUESTIONS),
     'GET /requests': () => json([]),
+    'GET /oauth2/userinfo': () =>
+      json({ user: 'u1', email: 'admin@helpdesk.local', preferredUsername: 'admin', groups: ['helpdesk-admin'] }),
     ...overrides,
   };
 }
@@ -85,7 +87,8 @@ describe('App', () => {
     );
   });
 
-  it('explains a 401 from the assistant', async () => {
+  it('takes the user to sign-in when the session has expired', async () => {
+    const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
     mockFetch(routes({ 'POST /ask': () => problem(401, 'Unauthorized') }));
     render(<App />);
     await screen.findByRole('option', { name: 'acme' });
@@ -93,8 +96,43 @@ describe('App', () => {
     await selectAndAsk(QUESTIONS[0].text);
 
     expect(await within(answers()).findByRole('alert')).toHaveTextContent(
-      'Unauthorized: HELPDESK_API_KEY is not set for the UI server.',
+      'Your session has expired. Taking you to sign-in…',
     );
+    expect(assign).toHaveBeenCalledWith(expect.stringMatching(/^\/oauth2\/sign_in\?rd=/));
+  });
+
+  it('shows the signed-in user with a sign-out link', async () => {
+    mockFetch(routes());
+    render(<App />);
+
+    const account = await screen.findByText('admin', { selector: '.user-menu__name' });
+    await userEvent.setup().click(account);
+
+    expect(screen.getByText('admin@helpdesk.local')).toBeVisible();
+    expect(within(screen.getByRole('list', { name: 'Roles' })).getByText('Admin')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign out' })).toHaveAttribute('href', '/oauth2/sign_out');
+  });
+
+  it('lets only admins add catalog questions', async () => {
+    mockFetch(
+      routes({
+        'GET /oauth2/userinfo': () => json({ user: 'u2', preferredUsername: 'acme-agent', groups: ['helpdesk-agent'] }),
+      }),
+    );
+    render(<App />);
+
+    expect(await screen.findByText('Only admins can add questions.')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'New question' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add to list' })).toBeDisabled();
+  });
+
+  it('works without oauth2-proxy in front (dev server): no user menu, nothing restricted', async () => {
+    mockFetch(routes({ 'GET /oauth2/userinfo': () => new Response('Not found', { status: 404 }) }));
+    render(<App />);
+    await screen.findByRole('option', { name: 'acme' });
+
+    expect(screen.queryByRole('link', { name: 'Sign out' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'New question' })).toBeEnabled();
   });
 
   it('shows load errors for customers, questions and history', async () => {

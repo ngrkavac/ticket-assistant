@@ -91,7 +91,7 @@ Every `/ask` request that reaches the model is stored in Postgres through a seco
 - `RequestLogClient` calls the `logRequest` MCP tool **directly from code**, on a virtual thread. A slow or failing log server never delays or fails the user's request; failures are only logged as warnings, without the question text.
 - The row is keyed by the same id the client receives in the `X-Request-Id` response header (`RequestIdFilter`). `logRequest` is idempotent per request id.
 - `ChatConfig.hideRequestLogTools` (an `McpToolFilter`) hides all request-log tools from the LLM. Otherwise a user could ask the model to read other users' questions or forge log entries.
-- Requests rejected before `AssistantService` (401 bad API key, 400 validation, 429 too many requests) are **not** logged.
+- Requests rejected before `AssistantService` (401 missing or invalid token, 400 validation, 429 too many requests) are **not** logged.
 
 Table `request_log` (Flyway `V1__request_log.sql`, `V2__customer_and_questions.sql`): `id`, `request_id` (unique), `question`, `answer`, `status` (`SUCCESS`/`ERROR`), `error_type`, `duration_ms`, `customer` (nullable), `created_at`.
 
@@ -131,15 +131,18 @@ docker compose up -d --build
 docker compose ps        # all services should be "healthy"
 ```
 
-`.env` must define `HELPDESK_API_KEY` and `REQUEST_LOG_DB_PASSWORD`, plus `COMPOSE_PROFILES=java` (or `python` / `rust`) to choose the ticket server implementation. The local `docker-compose.override.yml` publishes the MCP servers on `127.0.0.1:8081/8082` so Claude Code can connect. Postgres is never published. The override must use the new service names (`ticket-mcp-server-java`, `-python`, `-rust`); give the `127.0.0.1:8081:8081` port to all three, because only the active one is started.
+`.env` must define `REQUEST_LOG_DB_PASSWORD`, plus `COMPOSE_PROFILES=java` (or `python` / `rust`) to choose the ticket server implementation. The local `docker-compose.override.yml` publishes the MCP servers on `127.0.0.1:8081/8082` so Claude Code can connect. Postgres is never published. The override must use the new service names (`ticket-mcp-server-java`, `-python`, `-rust`); give the `127.0.0.1:8081:8081` port to all three, because only the active one is started.
 
 ### 2. Send a request
 
-Run from the project root (it reads `.env`). Keep it on **one line**: when a multi-line command is pasted, trailing spaces after `\` break the line continuation, so curl runs without headers (401) and zsh reports `command not found: -H`.
+Get an access token for a Keycloak demo user (README, "Local sign-in (Keycloak)"), then ask. Keep each command on **one line**: when a multi-line command is pasted, trailing spaces after `\` break the line continuation, so curl runs without headers (401) and zsh reports `command not found: -H`. Tokens expire after 5 minutes; get a new one when you see 401.
 
 ```bash
-KEY=$(grep HELPDESK_API_KEY .env | cut -d= -f2); curl -i -X POST localhost:8080/ask -H 'Content-Type: application/json' -H "X-API-Key: $KEY" -d '{"question":"What open tickets does acme have?"}'
+TOKEN=$(curl -s localhost:8180/realms/helpdesk/protocol/openid-connect/token -d grant_type=password -d client_id=helpdesk-dev-cli -d username=admin -d password=local-only-password | jq -r .access_token)
+curl -i -X POST localhost:8080/ask -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d '{"question":"What open tickets does acme have?","customer":"acme"}'
 ```
+
+Or open http://localhost:5173 and sign in with the same user.
 
 Expected (takes 20–60 s on the local model):
 
@@ -197,7 +200,7 @@ created_at  | 2026-11-15 12:30:17.593903+00
 |---|---|
 | `/mcp` lists no project servers | `.claude/settings.local.json` has `disabledMcpjsonServers`. Replace it with `enabledMcpjsonServers: ["tickets", "requestlog"]`, or run `claude mcp reset-project-choices`, then restart Claude Code. |
 | MCP tool calls from Claude Code time out | The SSE session went stale (for example, containers restarted after Claude Code connected). In `/mcp`, select the server and choose **Reconnect**. Check the server with `curl -N localhost:8082/sse`; it should print an `endpoint` event. |
-| `401 Unauthorized` | `X-API-Key` header missing or wrong; usually caused by a broken multi-line paste (see step 2). |
+| `401 Unauthorized` | Token missing, expired (5 minutes) or for another audience; get a new one. A broken multi-line paste also drops the header (see step 2). |
 | Request answered but no row in `request_log` | Check `docker compose logs assistant` for `Request ... not stored` warnings. |
 
 ## Developer Q&A notes
