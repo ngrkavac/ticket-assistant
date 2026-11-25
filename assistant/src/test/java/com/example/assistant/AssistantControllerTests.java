@@ -2,6 +2,7 @@ package com.example.assistant;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -56,7 +57,7 @@ class AssistantControllerTests {
 
   @Test
   void answersWithValidKey() throws Exception {
-    given(service.ask("hi", "acme")).willReturn("hello");
+    given(service.ask(eq("hi"), eq("acme"), any())).willReturn("hello");
     ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret")
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.answer").value("hello"))
@@ -66,10 +67,17 @@ class AssistantControllerTests {
   @Test
   void passesTheKnownCustomerToTheService() throws Exception {
     given(tickets.requireKnown("ACME")).willReturn("acme"); // the token says "acme"
-    given(service.ask("hi", "acme")).willReturn("hello acme");
+    given(service.ask(eq("hi"), eq("acme"), any())).willReturn("hello acme");
     ask("{\"question\":\"hi\",\"customer\":\"ACME\"}", "secret")
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.answer").value("hello acme"));
+    // the signed-in user goes along, for the tool context
+    verify(service)
+        .ask(
+            eq("hi"),
+            eq("acme"),
+            org.mockito.ArgumentMatchers.argThat(
+                p -> p != null && p.canAccess("acme") && !p.canAccess("globex")));
   }
 
   @Test
@@ -96,7 +104,7 @@ class AssistantControllerTests {
   void customerIsRequired() throws Exception {
     ask("{\"question\":\"hi\"}", "secret").andExpect(status().isBadRequest());
     ask("{\"question\":\"hi\",\"customer\":\" \"}", "secret").andExpect(status().isBadRequest());
-    verify(service, never()).ask(anyString(), any());
+    verify(service, never()).ask(anyString(), any(), any());
   }
 
   @Test
@@ -109,12 +117,12 @@ class AssistantControllerTests {
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.detail").value("Not allowed for this customer"));
     verify(tickets, never()).requireKnown("globex");
-    verify(service, never()).ask(anyString(), any());
+    verify(service, never()).ask(anyString(), any(), any());
   }
 
   @Test
   void userWithAllCustomersMayAskAboutAnyCustomer() throws Exception {
-    given(service.ask("hi", "globex")).willReturn("hello globex");
+    given(service.ask(eq("hi"), eq("globex"), any())).willReturn("hello globex");
     mvc.perform(
             post("/ask")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -139,7 +147,7 @@ class AssistantControllerTests {
           .andExpect(status().isForbidden())
           .andExpect(jsonPath("$.title").value("Forbidden"));
     }
-    verify(service, never()).ask(anyString(), any());
+    verify(service, never()).ask(anyString(), any(), any());
   }
 
   @Test
@@ -151,7 +159,7 @@ class AssistantControllerTests {
                 .with(jwt().authorities(new SimpleGrantedAuthority(SecurityConfig.ROLE_AGENT))))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.detail").value("Access denied."));
-    verify(service, never()).ask(anyString(), any());
+    verify(service, never()).ask(anyString(), any(), any());
   }
 
   @Test
@@ -172,7 +180,7 @@ class AssistantControllerTests {
 
   @Test
   void busyIs429WithRetryAfter() throws Exception {
-    given(service.ask(anyString(), any())).willThrow(new TooManyRequestsException());
+    given(service.ask(anyString(), any(), any())).willThrow(new TooManyRequestsException());
     ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret")
         .andExpect(status().isTooManyRequests())
         .andExpect(header().string("Retry-After", "5"));
@@ -180,7 +188,7 @@ class AssistantControllerTests {
 
   @Test
   void retryAfterComesFromTheRejection() throws Exception {
-    given(service.ask(anyString(), any()))
+    given(service.ask(anyString(), any(), any()))
         .willThrow(new TooManyRequestsException(java.time.Duration.ofMillis(1500)));
     ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret")
         .andExpect(status().isTooManyRequests())
@@ -189,7 +197,7 @@ class AssistantControllerTests {
 
   @Test
   void keepsAValidIncomingRequestId() throws Exception {
-    given(service.ask("hi", "acme")).willReturn("hello");
+    given(service.ask(eq("hi"), eq("acme"), any())).willReturn("hello");
     mvc.perform(
             post("/ask")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -202,7 +210,7 @@ class AssistantControllerTests {
 
   @Test
   void replacesAnInvalidIncomingRequestId() throws Exception {
-    given(service.ask("hi", "acme")).willReturn("hello");
+    given(service.ask(eq("hi"), eq("acme"), any())).willReturn("hello");
     mvc.perform(
             post("/ask")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -229,7 +237,8 @@ class AssistantControllerTests {
 
   @Test
   void bugIs500WithoutLeakingDetails() throws Exception {
-    given(service.ask(anyString(), any())).willThrow(new IllegalStateException("secret internals"));
+    given(service.ask(anyString(), any(), any()))
+        .willThrow(new IllegalStateException("secret internals"));
     ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret")
         .andExpect(status().isInternalServerError())
         .andExpect(jsonPath("$.detail").value("Internal error."));
@@ -237,7 +246,7 @@ class AssistantControllerTests {
 
   @Test
   void upstreamFailureIsA503WithoutLeakingDetails() throws Exception {
-    given(service.ask(anyString(), any()))
+    given(service.ask(anyString(), any(), any()))
         .willThrow(
             new org.springframework.web.client.ResourceAccessException(
                 "ollama at 10.0.0.5 timed out"));

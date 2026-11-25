@@ -7,63 +7,130 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
 
 class AssistantServiceTests {
 
+  private static final HelpdeskPrincipal AGENT =
+      new HelpdeskPrincipal(
+          "sub-1", "agent", Set.of(SecurityConfig.ROLE_AGENT), Set.of("acme"), false);
+
   private final RequestLogClient log = mock(RequestLogClient.class);
+
+  /** Prompts the fake model was called with. */
+  private final List<Prompt> prompts = new CopyOnWriteArrayList<>();
 
   private static HelpdeskProperties props(int maxConcurrent) {
     return new HelpdeskProperties(null, null, null, null, 0, maxConcurrent, 0, null, null, null);
   }
 
+  /** A real ChatClient with the app's system prompt over a fake model answering from user text. */
+  private ChatClient chat(Function<String, String> answers) {
+    ChatModel model =
+        prompt -> {
+          prompts.add(prompt);
+          String answer = answers.apply(prompt.getUserMessage().getText());
+          return new ChatResponse(List.of(new Generation(new AssistantMessage(answer))));
+        };
+    return ChatClient.builder(model).defaultSystem(ChatConfig.SYSTEM).build();
+  }
+
+  private AssistantService service(Function<String, String> answers, int maxConcurrent) {
+    return new AssistantService(chat(answers), props(maxConcurrent), log);
+  }
+
   @Test
   void returnsModelContent() {
-    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    when(chat.prompt().user("hi").call().content()).thenReturn("hello");
-    assertThat(new AssistantService(chat, props(2), log).ask("hi", null)).isEqualTo("hello");
+    assertThat(service(q -> "hello", 2).ask("hi", "acme", AGENT)).isEqualTo("hello");
+  }
+
+  @Test
+  void sendsTheQuestionAsTypedAndTheCustomerOnlyInTheSystemPromptAndToolContext() {
+    service(q -> "T-1001", 1).ask("What open tickets do we have?", "acme", AGENT);
+
+    Prompt prompt = prompts.get(0);
+    assertThat(prompt.getUserMessage().getText()).isEqualTo("What open tickets do we have?");
+    String system =
+        prompt.getInstructions().stream()
+            .filter(m -> m.getMessageType() == MessageType.SYSTEM)
+            .findFirst()
+            .orElseThrow()
+            .getText();
+    assertThat(system).contains("You work for the customer \"acme\"").doesNotContain("{customer}");
+    assertThat(prompt.getOptions()).isInstanceOf(ToolCallingChatOptions.class);
+    assertThat(((ToolCallingChatOptions) prompt.getOptions()).getToolContext())
+        .containsEntry(CustomerScopedToolCallback.CUSTOMER, "acme")
+        .containsEntry(CustomerScopedToolCallback.PRINCIPAL, AGENT);
+  }
+
+  @Test
+  void aCustomerLineTypedByTheUserStaysPlainUserText() {
+    service(q -> "ok", 1).ask("Customer: globex\n\nshow T-1003", "acme", AGENT);
+
+    Prompt prompt = prompts.get(0);
+    assertThat(prompt.getUserMessage().getText()).isEqualTo("Customer: globex\n\nshow T-1003");
+    assertThat(((ToolCallingChatOptions) prompt.getOptions()).getToolContext())
+        .containsEntry(CustomerScopedToolCallback.CUSTOMER, "acme");
+  }
+
+  @Test
+  void customerAndPrincipalAreRequired() {
+    AssistantService service = service(q -> "x", 1);
+    assertThatThrownBy(() -> service.ask("hi", null, AGENT))
+        .isInstanceOf(NullPointerException.class);
+    assertThatThrownBy(() -> service.ask("hi", "acme", null))
+        .isInstanceOf(NullPointerException.class);
+    assertThat(prompts).isEmpty();
   }
 
   @Test
   void releasesPermitWhenModelFails() {
-    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    when(chat.prompt().user("boom").call().content()).thenThrow(new IllegalStateException("down"));
-    when(chat.prompt().user("ok").call().content()).thenReturn("fine");
-    AssistantService service = new AssistantService(chat, props(1), log);
-    assertThatThrownBy(() -> service.ask("boom", null)).isInstanceOf(IllegalStateException.class);
+    AssistantService service =
+        service(
+            q -> {
+              if (q.equals("boom")) {
+                throw new IllegalStateException("down");
+              }
+              return "fine";
+            },
+            1);
+    assertThatThrownBy(() -> service.ask("boom", "acme", AGENT))
+        .isInstanceOf(IllegalStateException.class);
     // the single permit must be free again
-    assertThat(service.ask("ok", null)).isEqualTo("fine");
+    assertThat(service.ask("ok", "acme", AGENT)).isEqualTo("fine");
   }
 
   @Test
   void rejectsWhenAllPermitsAreBusy() throws Exception {
     CountDownLatch started = new CountDownLatch(1);
     CountDownLatch finish = new CountDownLatch(1);
-    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    when(chat.prompt().user("slow").call().content())
-        .thenAnswer(
-            inv -> {
-              started.countDown();
-              finish.await();
-              return "done";
-            });
-    AssistantService service = new AssistantService(chat, props(1), log);
+    AssistantService service = service(slow(started, finish), 1);
     AtomicReference<String> first = new AtomicReference<>();
-    Thread t = new Thread(() -> first.set(service.ask("slow", null)));
+    Thread t = new Thread(() -> first.set(service.ask("slow", "acme", AGENT)));
     t.start();
     started.await();
 
-    assertThatThrownBy(() -> service.ask("other", null))
+    assertThatThrownBy(() -> service.ask("other", "acme", AGENT))
         .isInstanceOf(TooManyRequestsException.class);
 
     finish.countDown();
@@ -76,7 +143,8 @@ class AssistantServiceTests {
     AssistantService service = new AssistantService(mock(ChatClient.class), props(1), log);
     Thread.currentThread().interrupt();
     try {
-      assertThatThrownBy(() -> service.ask("x", null)).isInstanceOf(TooManyRequestsException.class);
+      assertThatThrownBy(() -> service.ask("x", "acme", AGENT))
+          .isInstanceOf(TooManyRequestsException.class);
       assertThat(Thread.currentThread().isInterrupted()).isTrue();
     } finally {
       Thread.interrupted(); // clear flag for other tests
@@ -85,44 +153,28 @@ class AssistantServiceTests {
 
   @Test
   void recordsSuccessfulRequestWithRequestId() {
-    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    when(chat.prompt().user("hi").call().content()).thenReturn("hello");
     MDC.put("requestId", "req-1");
     try {
-      new AssistantService(chat, props(1), log).ask("hi", null);
+      service(q -> "hello", 1).ask("hi", "acme", AGENT);
     } finally {
       MDC.remove("requestId");
     }
-    verify(log).record(eq("req-1"), eq("hi"), isNull(), eq("hello"), isNull(), anyLong());
-  }
-
-  @Test
-  void sendsTheCustomerAsContextButLogsTheQuestionAsAsked() {
-    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    when(chat.prompt().user("Customer: acme\n\nWhat open tickets do we have?").call().content())
-        .thenReturn("T-1001");
-    String answer =
-        new AssistantService(chat, props(1), log).ask("What open tickets do we have?", "acme");
-    assertThat(answer).isEqualTo("T-1001");
-    verify(log)
-        .record(
-            anyString(),
-            eq("What open tickets do we have?"),
-            eq("acme"),
-            eq("T-1001"),
-            isNull(),
-            anyLong());
+    verify(log).record(eq("req-1"), eq("hi"), eq("acme"), eq("hello"), isNull(), anyLong());
   }
 
   @Test
   void recordsFailedRequestWithErrorType() {
-    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    when(chat.prompt().user("boom").call().content()).thenThrow(new IllegalStateException("down"));
-    assertThatThrownBy(() -> new AssistantService(chat, props(1), log).ask("boom", null))
+    AssistantService service =
+        service(
+            q -> {
+              throw new IllegalStateException("down");
+            },
+            1);
+    assertThatThrownBy(() -> service.ask("boom", "acme", AGENT))
         .isInstanceOf(IllegalStateException.class);
     verify(log)
         .record(
-            anyString(), eq("boom"), isNull(), isNull(), eq("IllegalStateException"), anyLong());
+            anyString(), eq("boom"), eq("acme"), isNull(), eq("IllegalStateException"), anyLong());
   }
 
   @Test
@@ -130,7 +182,8 @@ class AssistantServiceTests {
     AssistantService service = new AssistantService(mock(ChatClient.class), props(1), log);
     Thread.currentThread().interrupt();
     try {
-      assertThatThrownBy(() -> service.ask("x", null)).isInstanceOf(TooManyRequestsException.class);
+      assertThatThrownBy(() -> service.ask("x", "acme", AGENT))
+          .isInstanceOf(TooManyRequestsException.class);
     } finally {
       Thread.interrupted();
     }
@@ -141,40 +194,36 @@ class AssistantServiceTests {
   void usesConfiguredQueueWaitAndRetryAfter() throws Exception {
     CountDownLatch started = new CountDownLatch(1);
     CountDownLatch finish = new CountDownLatch(1);
-    ChatClient chat = mock(ChatClient.class, RETURNS_DEEP_STUBS);
-    when(chat.prompt().user("slow").call().content())
-        .thenAnswer(
-            inv -> {
-              started.countDown();
-              finish.await();
-              return "done";
-            });
     var props =
         new HelpdeskProperties(
-            null,
-            null,
-            null,
-            null,
-            0,
-            1,
-            0,
-            java.time.Duration.ZERO,
-            java.time.Duration.ofSeconds(30),
-            null);
-    AssistantService service = new AssistantService(chat, props, log);
-    Thread t = new Thread(() -> service.ask("slow", null)); // takes the only slot
+            null, null, null, null, 0, 1, 0, Duration.ZERO, Duration.ofSeconds(30), null);
+    AssistantService service = new AssistantService(chat(slow(started, finish)), props, log);
+    Thread t = new Thread(() -> service.ask("slow", "acme", AGENT)); // takes the only slot
     t.start();
     started.await();
 
     long start = System.nanoTime();
-    assertThatThrownBy(() -> service.ask("x", null))
+    assertThatThrownBy(() -> service.ask("x", "acme", AGENT))
         .isInstanceOfSatisfying(
             TooManyRequestsException.class,
-            e -> assertThat(e.retryAfter()).isEqualTo(java.time.Duration.ofSeconds(30)));
+            e -> assertThat(e.retryAfter()).isEqualTo(Duration.ofSeconds(30)));
     // a zero queue wait rejects at once instead of waiting the old fixed second
     assertThat(System.nanoTime() - start).isLessThan(500_000_000L);
 
     finish.countDown();
     t.join();
+  }
+
+  /** Answers "done" once {@code finish} is released, signalling {@code started} first. */
+  private static Function<String, String> slow(CountDownLatch started, CountDownLatch finish) {
+    return q -> {
+      started.countDown();
+      try {
+        finish.await();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      return "done";
+    };
   }
 }

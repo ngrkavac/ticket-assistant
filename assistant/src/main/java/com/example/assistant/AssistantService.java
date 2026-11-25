@@ -1,6 +1,8 @@
 package com.example.assistant;
 
 import java.time.Duration;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -35,10 +37,14 @@ class AssistantService {
   }
 
   /**
-   * Asks the model. When a customer is given it is put in front of the question as context, so
-   * ticket tools are called for that customer; the log stores the question as typed.
+   * Asks the model on behalf of {@code principal}, for {@code customer} (already checked against
+   * the principal by the caller). The user text is the question as typed. The customer goes into
+   * the system prompt and, with the principal, into the tool context, where {@link
+   * CustomerScopedToolCallback} limits every ticket tool call to it.
    */
-  public String ask(String question, String customer) {
+  public String ask(String question, String customer, HelpdeskPrincipal principal) {
+    Objects.requireNonNull(customer, "customer");
+    Objects.requireNonNull(principal, "principal");
     try {
       if (!permits.tryAcquire(queueWait.toNanos(), TimeUnit.NANOSECONDS)) {
         throw new TooManyRequestsException(retryAfter);
@@ -52,7 +58,16 @@ class AssistantService {
     String answer = null;
     String errorType = null;
     try {
-      answer = chat.prompt().user(userMessage(question, customer)).call().content();
+      answer =
+          chat.prompt()
+              .system(s -> s.param(ChatConfig.CUSTOMER_PARAM, customer))
+              .toolContext(
+                  Map.of(
+                      CustomerScopedToolCallback.CUSTOMER, customer,
+                      CustomerScopedToolCallback.PRINCIPAL, principal))
+              .user(question)
+              .call()
+              .content();
       return answer;
     } catch (RuntimeException | Error e) {
       errorType = e.getClass().getSimpleName();
@@ -67,10 +82,6 @@ class AssistantService {
           errorType,
           (System.nanoTime() - start) / 1_000_000);
     }
-  }
-
-  static String userMessage(String question, String customer) {
-    return customer == null ? question : "Customer: " + customer + "\n\n" + question;
   }
 
   /** Same id as the X-Request-Id header (set by {@link RequestIdFilter}). */

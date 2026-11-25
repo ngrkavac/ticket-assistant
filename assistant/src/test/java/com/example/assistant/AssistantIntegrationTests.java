@@ -78,6 +78,26 @@ class AssistantIntegrationTests {
   }
 
   @Test
+  void theCustomerReachesTheModelOnlyThroughTheSystemPrompt() throws Exception {
+    given(tickets.requireKnown("acme")).willReturn("acme");
+    mvc.perform(
+            post("/ask")
+                .with(TestUsers.agent("acme"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"What open tickets do we have?\",\"customer\":\"acme\"}"))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.answer")
+                .value(
+                    org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString("You work for the customer \"acme\""),
+                        org.hamcrest.Matchers.not(
+                            org.hamcrest.Matchers.containsString("Customer: acme")),
+                        org.hamcrest.Matchers.not(
+                            org.hamcrest.Matchers.containsString("{customer}")))));
+  }
+
+  @Test
   void askingAboutAnotherCustomerIs403() throws Exception {
     mvc.perform(
             post("/ask")

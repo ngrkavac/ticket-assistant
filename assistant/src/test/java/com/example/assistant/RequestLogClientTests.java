@@ -187,7 +187,7 @@ class RequestLogClientTests {
 
   @Test
   void requestLogToolsAreHiddenFromTheModel() {
-    var filter = new ChatConfig().hideRequestLogTools(props(true));
+    var filter = new ChatConfig().hideInternalTools(props(true));
     McpSchema.Tool tool = McpSchema.Tool.builder().name("logRequest").build();
     assertThat(filter.test(info("requestlog"), tool)).isFalse();
     assertThat(filter.test(info("tickets"), tool)).isTrue();
