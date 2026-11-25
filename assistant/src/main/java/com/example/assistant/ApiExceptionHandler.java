@@ -10,6 +10,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.web.firewall.RequestRejectedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -31,6 +32,20 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(RequestRejectedException.class)
   ProblemDetail rejected(RequestRejectedException e) {
     return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Malformed request.");
+  }
+
+  /** A customer that is not in the caller's token (K3). */
+  @ExceptionHandler(CustomerNotAllowedException.class)
+  ProblemDetail customerNotAllowed(CustomerNotAllowedException e) {
+    log.info("Denied access to a customer that is not in the caller's token");
+    return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, e.getMessage());
+  }
+
+  /** Thrown inside MVC (the security chain renders its own 403s before MVC is reached). */
+  @ExceptionHandler(AccessDeniedException.class)
+  ProblemDetail denied(AccessDeniedException e) {
+    log.info("Access denied: {}", e.getMessage());
+    return ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, "Access denied.");
   }
 
   @ExceptionHandler(UnknownCustomerException.class)

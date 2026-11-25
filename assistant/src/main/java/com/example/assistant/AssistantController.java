@@ -3,6 +3,7 @@ package com.example.assistant;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,18 +25,22 @@ class AssistantController {
   }
 
   /**
-   * The customer is optional; when given it must be known to the ticket server. Hard upper bound on
-   * the question; the configurable helpdesk.max-question-length is checked in the handler.
+   * The customer is required (K3): it must be in the caller's token (403 otherwise) and known to
+   * the ticket server (400 otherwise). Hard upper bound on the question; the configurable
+   * helpdesk.max-question-length is checked in the handler.
    */
-  record Question(@NotBlank @Size(max = 10000) String question, @Size(max = 64) String customer) {}
+  record Question(
+      @NotBlank @Size(max = 10000) String question, @NotBlank @Size(max = 64) String customer) {}
 
   record Answer(String answer) {}
 
   @PostMapping("/ask")
-  Answer ask(@Valid @RequestBody Question q) {
+  Answer ask(@Valid @RequestBody Question q, Authentication authentication) {
     if (q.question().length() > props.maxQuestionLength()) {
       throw new QuestionTooLongException(props.maxQuestionLength());
     }
+    // checked before the ticket server is asked, so callers cannot probe which customers exist
+    HelpdeskPrincipal.require(authentication).requireAccess(q.customer());
     return new Answer(service.ask(q.question(), tickets.requireKnown(q.customer())));
   }
 }
