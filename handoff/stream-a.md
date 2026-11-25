@@ -1,53 +1,25 @@
-# Stream a handoff – 2026-11-23
+# Stream a handoff – 2026-11-25
 ## Done this session
-- A5 – `prod/a5-resource-server` (base `origin/main` a910a92)
-- A6 – `prod/a6-jwt-principal` (base `prod/a5-resource-server`, stacked)
+- A7 – `prod/a7-endpoint-authz` (base `main` d704c75)
 
 ## Ready to push
-### `prod/a5-resource-server` (base: `main`)
-**PR title:** Make the assistant an OAuth2 resource server, deny by default (A5)
+### `prod/a7-endpoint-authz` (base: `main`)
+**PR title:** Authorize endpoints by role and customer per K3 (A7)
 
 **PR body:**
-Stream A, task A5 (T1.1). Fixes findings A2 and A7 (API side).
+Stream A, task A7 (T1.3). Implements contract K3 on the assistant side.
 
-- Adds `spring-boot-starter-oauth2-resource-server`. New `SecurityConfig`: every endpoint on the app port needs an authenticated caller, including endpoints added later (no more `PROTECTED` path list). Stateless, CSRF off (bearer only), no request cache, form login, basic auth or logout.
-- Outside the `local` profile the bearer JWT is validated against `OIDC_ISSUER_URI` (`spring.security.oauth2.resourceserver.jwt.issuer-uri`) and `OIDC_AUDIENCE` (default `helpdesk-assistant`). Without an issuer the app **refuses to start** with a clear message.
-- Optional `OIDC_JWK_SET_URI`: fetch signing keys from that URL instead of from issuer discovery, for when the issuer URL in the tokens is not reachable from the assistant (Keycloak in compose: issuer `http://localhost:8180/realms/helpdesk`, keys at `http://keycloak:8080/realms/helpdesk/protocol/openid-connect/certs`). Issuer, audience and expiry are still validated, and keys are fetched on first use, not at startup. This is a backwards-compatible addition to K8.
-- Actuator is open only on the separate management server (9090, K7), so probes and Prometheus need no token. If actuator shares the app port, it needs a token like everything else.
-- Security headers on every API response: `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and HSTS (1 year, includeSubDomains) on HTTPS requests.
-- 401 and 403 are `application/problem+json`. A 401 from the OIDC chain carries `WWW-Authenticate: Bearer`. Requests rejected by the Spring Security firewall (e.g. `;` in the path, or a control character in a header) get 400 instead of 500.
-- `ApiKeyFilter` is no longer a servlet filter. It runs only in the `local` profile's chain (`application-local.properties`, `HELPDESK_API_KEY`): with a key set, `X-API-Key` must match (401 otherwise); with a blank key every request is let in as a local user with all roles, and a WARN is logged at startup.
-- Tests: `SecurityConfigTests` (real RS256 tokens: valid, missing, garbage, wrong key, wrong audience, expired; deny by default for unknown paths; headers; 403 problem; fail-fast), `JwkSetUriDecoderTests`, `LocalSecurityTests`, `ActuatorSecurityTests` (real ports: management port open, app port 401, JWK-set-URI decoder wired). Controller tests now use `jwt()`.
+- `SecurityConfig`: `POST /ask` needs `helpdesk-agent`. `POST /questions` needs `helpdesk-admin`. Every other endpoint on the app port (the reads, plus endpoints added later) needs `helpdesk-agent` or `helpdesk-admin`. A valid token without a helpdesk role now gets a 403 problem instead of reaching the controllers. Actuator on the management port is unchanged.
+- `POST /ask`: `customer` is now **required** (400 if missing or blank). A customer that is not in the token gets a 403 with `detail: "Not allowed for this customer"`. This check runs before the ticket server is asked, so callers cannot probe which customers exist. An allowed but unknown customer still gets a 400. The response stays `{answer}`.
+- `GET /customers` returns only the customers in the token, or all of them for `customers: ["*"]`.
+- `GET /requests?customer=` gets the same 403 check. Leaving out `customer` (all customers) is allowed only for users with `customers: ["*"]`.
+- New `CustomerNotAllowedException` (an `AccessDeniedException`) and `HelpdeskPrincipal.require(..)`/`requireAccess(..)`. `ApiExceptionHandler` maps both to 403 problems instead of the catch-all 500.
+- The `local` profile is unchanged: the local user has every role and every customer.
+- Tests: a new `TestUsers` helper authenticates MockMvc requests with a real `HelpdeskPrincipal`. There are new role and customer cases for every endpoint, real signed-token cases in `SecurityConfigTests`, and a cross-customer 403 in `AssistantIntegrationTests`. The full endpoint × role × customer matrix is A12.
 
-`./mvnw -pl assistant -am verify` passes.
+`OIDC_JWK_SET_URI` (asked for in the C6 PR) already shipped with A5, so this PR needs no K8 change.
 
-**Breaking for deployments:** the assistant no longer starts without `OIDC_ISSUER_URI` unless `SPRING_PROFILES_ACTIVE=local`.
-
-Needs from stream C:
-- `docker-compose.yml`: until C6/C7 land, set `SPRING_PROFILES_ACTIVE: local` on the `assistant` service (keeps the current `HELPDESK_API_KEY` + nginx `X-API-Key` flow working). With C6/C7, drop `local` and set `OIDC_ISSUER_URI=http://localhost:8180/realms/helpdesk`, `OIDC_JWK_SET_URI=http://keycloak:8080/realms/helpdesk/protocol/openid-connect/certs` and `OIDC_AUDIENCE=helpdesk-assistant`.
-- README: document `OIDC_ISSUER_URI`, `OIDC_AUDIENCE`, `OIDC_JWK_SET_URI`, the `local` profile and the fact that `HELPDESK_API_KEY` only works in `local`.
-- Any future Helm/K8s values: `OIDC_ISSUER_URI` is required in `prod`.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-### `prod/a6-jwt-principal` (base: `prod/a5-resource-server`)
-Stacked on A5 because it changes the same `SecurityConfig`, `ApiKeyFilter`, `application.properties` and `SecurityConfigTests`. Merge A5 first, then retarget this PR to `main`.
-
-**PR title:** Map the JWT to a HelpdeskPrincipal with roles and allowed customers (A6)
-
-**PR body:**
-Stream A, task A6 (T1.2). Depends on #<A5 PR> (stacked on `prod/a5-resource-server`; retarget to `main` once A5 is merged).
-
-- New `HelpdeskPrincipal` (`subject`, `username`, `roles`, `customers`, `allCustomers`) with `hasRole`, `canAccess(customer)` (case-insensitive) and `HelpdeskPrincipal.of(Authentication)`. A7 and A8 will use it for authorization and tool scoping.
-- New `HelpdeskJwtConverter`, wired into the resource server. Per K1, each entry of the `roles` claim becomes an authority with the same name (`helpdesk-agent`, `helpdesk-admin`, `tickets-write`; no `ROLE_` prefix, so use `hasAuthority`). The `customers` claim becomes a lower-cased allowed set, and `"*"` means all customers. A claim may be a JSON array or a space/comma-separated string. A missing claim means no roles or no customers. A token without `sub` gets 401. `username` is `preferred_username`, falling back to `sub`, and `getName()` is the `sub`.
-- Claim names are configurable: `helpdesk.security.roles-claim` / `helpdesk.security.customers-claim` (env `OIDC_ROLES_CLAIM` / `OIDC_CUSTOMERS_CLAIM`, defaults `roles` / `customers`). A dotted name reads a nested claim, e.g. Keycloak's `realm_access.roles`.
-- The `local`-profile user is now `HelpdeskPrincipal.LOCAL` (all roles, all customers), so later authorization code handles both profiles the same way.
-- Tests: `HelpdeskJwtConverterTests`; `SecurityConfigTests.tokenClaimsBecomeTheHelpdeskPrincipal` (a real signed token through the chain); `LocalSecurityTests`; `HelpdeskPropertiesTests`.
-
-`./mvnw -pl assistant -am verify` passes.
-
-Needs from stream C:
-- README: document `OIDC_ROLES_CLAIM` and `OIDC_CUSTOMERS_CLAIM` (optional; the defaults match the K1 realm).
+**Needs from stream C (UI, C7):** the UI already sends `customer` on every `/ask` and shows the problem `detail` on errors, so nothing breaks. Nice to have: hide or disable "add question" for users without `helpdesk-admin` (it now returns 403), and treat a 403 on `/ask` as "not allowed for this customer" rather than a generic failure.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -55,15 +27,15 @@ Needs from stream C:
 none
 
 ## Next task
-A7 – dependencies satisfied: yes (needs A5 and A6; branch from `prod/a6-jwt-principal` if they are not merged yet)
+A8 [L] – dependencies satisfied: yes. A8 is [L], so it needs a session of its own. If A7 is not merged yet, branch A8 from `prod/a7-endpoint-authz`, because both touch `AssistantController`/`AssistantService`.
 
 ## Blocked on
 nothing
 
 ## Notes for the next session
-- Authorities are the plain role names (`hasAuthority("helpdesk-admin")`), with no `ROLE_` prefix. Role constants are `SecurityConfig.ROLE_AGENT/ROLE_ADMIN/ROLE_WRITER`. Use `HelpdeskPrincipal.of(authentication)` in controllers (or `@AuthenticationPrincipal HelpdeskPrincipal`). It is never null behind the app chains, in either profile.
-- 403 is already rendered as a problem by `SecurityConfig.problemDenied()`. For A7, a `@PreAuthorize`/`AccessDeniedException` thrown inside MVC goes to `ApiExceptionHandler`'s catch-all (500) unless you add a handler for `AccessDeniedException` there.
-- WebMvc tests: `@Import({SecurityConfig.class, RequestIdFilter.class, ApiExceptionHandler.class})`, `@MockitoBean JwtDecoder jwtDecoder`, and `.with(jwt().authorities(...))`. Note that `jwt()` does NOT run `HelpdeskJwtConverter`, so the principal will be a `Jwt`, not a `HelpdeskPrincipal`. For A7 tests, either use `.with(authentication(new HelpdeskJwtConverter(...).convert(jwt)))` or the real signed tokens from `SecurityConfigTests.token(...)`.
-- Boot's `@ConditionalOnProperty` matches an empty `jwk-set-uri`, so the property is `helpdesk.security.jwk-set-uri` with our own decoder bean (`SecurityConfig.jwkSetUriJwtDecoder`), not Boot's.
-- The worktree sandbox rejects compound shell commands with heredocs plus `cd`/git. Write Python edit scripts to the scratchpad and run them with `python3 <script>`.
-- Run `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant` before `./mvnw -pl assistant -am verify`.
+- Authorization layout: role rules live in `SecurityConfig.api()` (URL + method). Customer checks happen in the controllers through `HelpdeskPrincipal.require(authentication).requireAccess(customer)`, which throws `CustomerNotAllowedException` (403, detail "Not allowed for this customer").
+- Tests: use `TestUsers.agent("acme")`, `TestUsers.admin()` (agent+admin, all customers) or `TestUsers.user(roles, customers, all)` instead of `jwt()`. `jwt()` has no `HelpdeskPrincipal`, so controllers answer 403 "Access denied." to it. `SecurityConfigTests.acmeAgentToken()` gives a real signed token.
+- `AssistantIntegrationTests` now mocks `TicketDirectoryClient` (there is no MCP server there), which is useful for the A8/A12 cross-customer tool-call test.
+- `AssistantService.ask` still takes a nullable customer and puts it in the user text as `Customer: ...`. A8 removes that and passes it through the ToolContext instead. The customer is now always non-null when it comes from `/ask`.
+- The worktree sandbox rejects compound shell commands that mix heredocs with `cd`/git. Write edit scripts with the Write tool into the scratchpad and run them with `python3 <script>`.
+- Run `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant` before `./mvnw -pl assistant -am verify` (124 tests, green at the A7 commit).
