@@ -11,11 +11,46 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.jdbc.JdbcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
-class TicketToolsTests {
+/**
+ * The tool behaviour on a real database with the demo seed, run once per database (PostgreSQL via
+ * Testcontainers and H2 for the {@code local} profile, see the subclasses).
+ *
+ * <p>Every test starts from a freshly migrated and seeded schema (Flyway clean + migrate), so ids
+ * created by one test never leak into another. Test-managed transactions are off, so each tool call
+ * commits as in production. {@code TicketTools} is imported because the application class declares
+ * its MCP callback bean.
+ */
+@JdbcTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
+@Import({TicketRepository.class, TicketTools.class})
+@TestPropertySource(
+    properties = {
+      "spring.flyway.locations=classpath:db/migration,classpath:db/seed",
+      "spring.flyway.clean-disabled=false"
+    })
+abstract class AbstractTicketToolsTests {
 
-  private final TicketTools tools = new TicketTools();
+  @Autowired TicketTools tools;
+
+  @Autowired Flyway flyway;
+
+  @BeforeEach
+  void resetDatabase() {
+    flyway.clean();
+    flyway.migrate();
+  }
 
   private static List<String> ids(List<Ticket> tickets) {
     return tickets.stream().map(Ticket::id).toList();
@@ -87,6 +122,12 @@ class TicketToolsTests {
   void unknownTicketFails() {
     assertThatThrownBy(() -> tools.getTicket("acme", "T-9999"))
         .hasMessage("Ticket T-9999 not found");
+  }
+
+  @Test
+  void idWithLeadingZerosIsNotFound() {
+    assertThatThrownBy(() -> tools.getTicket("acme", "T-01001"))
+        .hasMessage("Ticket T-01001 not found");
   }
 
   @Test
