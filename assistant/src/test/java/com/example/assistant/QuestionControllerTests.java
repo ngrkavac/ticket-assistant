@@ -4,13 +4,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -38,7 +38,7 @@ class QuestionControllerTests {
   private ResultActions add(String body, String key) throws Exception {
     var req = post("/questions").contentType(MediaType.APPLICATION_JSON).content(body);
     if (key != null) {
-      req.with(jwt());
+      req.with(TestUsers.admin());
     }
     return mvc.perform(req);
   }
@@ -47,7 +47,7 @@ class QuestionControllerTests {
   void listsQuestions() throws Exception {
     given(requestLog.questions())
         .willReturn(List.of(new RequestLogClient.CatalogQuestion(1, "VPN?")));
-    mvc.perform(get("/questions").with(jwt()))
+    mvc.perform(get("/questions").with(TestUsers.agent()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$[0].id").value(1))
         .andExpect(jsonPath("$[0].text").value("VPN?"));
@@ -90,6 +90,38 @@ class QuestionControllerTests {
   }
 
   @Test
+  void addingNeedsTheAdminRole() throws Exception {
+    mvc.perform(
+            post("/questions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"text\":\"q\"}")
+                .with(TestUsers.agent("acme")))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.title").value("Forbidden"));
+    verify(requestLog, never()).addQuestion(any());
+  }
+
+  @Test
+  void adminWithoutTheAgentRoleCanListAndAdd() throws Exception {
+    var admin = TestUsers.user(Set.of(SecurityConfig.ROLE_ADMIN), Set.of(), false);
+    given(requestLog.questions()).willReturn(List.of());
+    given(requestLog.addQuestion("q")).willReturn(new RequestLogClient.CatalogQuestion(9, "q"));
+    mvc.perform(get("/questions").with(admin)).andExpect(status().isOk());
+    mvc.perform(
+            post("/questions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"text\":\"q\"}")
+                .with(admin))
+        .andExpect(status().isCreated());
+  }
+
+  @Test
+  void listingNeedsAHelpdeskRole() throws Exception {
+    mvc.perform(get("/questions").with(TestUsers.user(Set.of(), Set.of("acme"), false)))
+        .andExpect(status().isForbidden());
+  }
+
+  @Test
   void requiresAuthentication() throws Exception {
     mvc.perform(get("/questions")).andExpect(status().isUnauthorized());
     add("{\"text\":\"q\"}", null).andExpect(status().isUnauthorized());
@@ -98,6 +130,7 @@ class QuestionControllerTests {
   @Test
   void logServerFailureIsA503() throws Exception {
     given(requestLog.questions()).willThrow(new RequestLogUnavailableException("down", null));
-    mvc.perform(get("/questions").with(jwt())).andExpect(status().isServiceUnavailable());
+    mvc.perform(get("/questions").with(TestUsers.agent()))
+        .andExpect(status().isServiceUnavailable());
   }
 }

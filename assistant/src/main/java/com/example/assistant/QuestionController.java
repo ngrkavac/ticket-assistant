@@ -12,9 +12,10 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The questions offered in the UI, stored by the request-log server. Anyone with the API key can
- * add one; adding the same text twice returns the existing question. Catalog questions are limited
- * to helpdesk.max-catalog-question-length characters (the request-log server's own limit), which is
+ * The questions offered in the UI, stored by the request-log server. Every helpdesk user can list
+ * them; only {@code helpdesk-admin} can add one (enforced by {@link SecurityConfig}). Adding the
+ * same text twice returns the existing question. Catalog questions are limited to
+ * helpdesk.max-catalog-question-length characters (the request-log server's own limit), which is
  * separate from the /ask limit.
  */
 @RestController

@@ -80,14 +80,23 @@ class SecurityConfigTests {
   @MockitoBean TicketDirectoryClient tickets;
 
   @Test
-  void validTokenIsAccepted() throws Exception {
-    given(tickets.customers()).willReturn(List.of("acme"));
+  void validTokenIsAcceptedAndScopedToItsCustomers() throws Exception {
+    given(tickets.customers()).willReturn(List.of("acme", "globex"));
+    mvc.perform(get("/customers").header("Authorization", "Bearer " + acmeAgentToken()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0]").value("acme"))
+        .andExpect(header().doesNotExist("Set-Cookie"));
+  }
+
+  @Test
+  void validTokenWithoutAHelpdeskRoleIs403Problem() throws Exception {
     mvc.perform(
             get("/customers")
                 .header("Authorization", "Bearer " + token(KEY, "helpdesk-assistant", 300)))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$[0]").value("acme"))
-        .andExpect(header().doesNotExist("Set-Cookie"));
+        .andExpect(status().isForbidden())
+        .andExpect(content().contentType("application/problem+json"))
+        .andExpect(jsonPath("$.title").value("Forbidden"));
   }
 
   @Test
@@ -125,6 +134,8 @@ class SecurityConfigTests {
     mvc.perform(
             get("/admin/anything")
                 .header("Authorization", "Bearer " + token(KEY, "helpdesk-assistant", 300)))
+        .andExpect(status().isForbidden());
+    mvc.perform(get("/admin/anything").header("Authorization", "Bearer " + acmeAgentToken()))
         .andExpect(status().isNotFound());
   }
 
@@ -210,6 +221,17 @@ class SecurityConfigTests {
           "authorities",
           authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList());
     }
+  }
+
+  /** A valid token for {@code helpdesk-agent} on customer {@code acme}, like the realm's user. */
+  static String acmeAgentToken() {
+    return token(
+        KEY,
+        "helpdesk-assistant",
+        300,
+        new JWTClaimsSet.Builder()
+            .claim("roles", List.of("helpdesk-agent"))
+            .claim("customers", List.of("acme")));
   }
 
   static String token(RSAKey key, String audience, long expiresInSeconds) {

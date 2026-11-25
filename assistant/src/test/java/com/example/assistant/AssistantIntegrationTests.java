@@ -1,7 +1,7 @@
 package com.example.assistant;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -52,6 +52,9 @@ class AssistantIntegrationTests {
   /** Tokens come from jwt(); the decoder only has to exist, as it does with OIDC_ISSUER_URI set. */
   @MockitoBean JwtDecoder jwtDecoder;
 
+  /** There is no ticket server: the customer check is answered by this mock. */
+  @MockitoBean TicketDirectoryClient tickets;
+
   @Test
   void knowledgeBaseIsIndexedAndSearchable() {
     List<Document> hits = vectorStore.similaritySearch("vpn drops tcp udp protocol");
@@ -62,14 +65,27 @@ class AssistantIntegrationTests {
   @Test
   void retrievedKnowledgeReachesThePrompt() throws Exception {
     // The fake chat model echoes the full prompt, so the answer shows what the LLM would have seen.
+    given(tickets.requireKnown("acme")).willReturn("acme");
     mvc.perform(
             post("/ask")
-                .with(jwt())
+                .with(TestUsers.agent("acme"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
-                    "{\"question\":\"My vpn drops, which protocol should I use, udp or tcp?\"}"))
+                    "{\"question\":\"My vpn drops, which protocol should I use, udp or"
+                        + " tcp?\",\"customer\":\"acme\"}"))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.answer").value(org.hamcrest.Matchers.containsString("UDP to TCP")));
+  }
+
+  @Test
+  void askingAboutAnotherCustomerIs403() throws Exception {
+    mvc.perform(
+            post("/ask")
+                .with(TestUsers.agent("acme"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\":\"hi\",\"customer\":\"globex\"}"))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.detail").value("Not allowed for this customer"));
   }
 
   @Test

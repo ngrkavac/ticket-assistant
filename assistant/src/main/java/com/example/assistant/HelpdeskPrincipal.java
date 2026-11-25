@@ -2,6 +2,7 @@ package com.example.assistant;
 
 import java.util.Locale;
 import java.util.Set;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticatedPrincipal;
 import org.springframework.security.core.Authentication;
 
@@ -45,6 +46,31 @@ public record HelpdeskPrincipal(
   boolean canAccess(String customer) {
     return customer != null
         && (allCustomers || customers.contains(customer.trim().toLowerCase(Locale.ROOT)));
+  }
+
+  /**
+   * Checks that this user may act for {@code customer}.
+   *
+   * @throws CustomerNotAllowedException (403) if the customer is not in the user's token
+   */
+  void requireAccess(String customer) {
+    if (!canAccess(customer)) {
+      throw new CustomerNotAllowedException();
+    }
+  }
+
+  /**
+   * The principal of an authentication made by this app's security chains.
+   *
+   * @throws AccessDeniedException (403) for any other authentication, so a caller this app did not
+   *     authenticate never gets access to customer data
+   */
+  static HelpdeskPrincipal require(Authentication authentication) {
+    HelpdeskPrincipal principal = of(authentication);
+    if (principal == null) {
+      throw new AccessDeniedException("Not a helpdesk user");
+    }
+    return principal;
   }
 
   /** The principal of an authentication made by this app's security chains, otherwise null. */

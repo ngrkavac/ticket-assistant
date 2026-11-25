@@ -18,6 +18,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -43,9 +44,14 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.context.support.WebApplicationContextUtils;
 
 /**
- * Deny by default: every endpoint on the application port needs an authenticated caller, including
- * endpoints added later. Actuator is open only when it runs on its own management port (the
- * default, 9090), which is never published outside the cluster.
+ * Deny by default: every endpoint on the application port needs an authenticated caller with a
+ * helpdesk role, including endpoints added later. Actuator is open only when it runs on its own
+ * management port (the default, 9090), which is never published outside the cluster.
+ *
+ * <p>Endpoint authorization (K3): {@code POST /ask} needs {@code helpdesk-agent}, {@code POST
+ * /questions} needs {@code helpdesk-admin}, and every other endpoint needs one of the two. Which
+ * customers a caller may see or ask about is checked by the controllers against the {@link
+ * HelpdeskPrincipal} (403 for a customer that is not in the token).
  *
  * <p>Outside the {@code local} profile the caller is an OIDC user: the assistant is an OAuth2
  * resource server that validates the bearer JWT against {@code OIDC_ISSUER_URI} and {@code
@@ -194,8 +200,14 @@ class SecurityConfig {
                 // error dispatches render the error of a request that was already authorized
                 a.dispatcherTypeMatchers(DispatcherType.ERROR)
                     .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/ask")
+                    .hasAuthority(ROLE_AGENT)
+                    .requestMatchers(HttpMethod.POST, "/questions")
+                    .hasAuthority(ROLE_ADMIN)
+                    // everything else (reads, and endpoints added later) needs a helpdesk role;
+                    // per-customer checks are done by the controllers
                     .anyRequest()
-                    .authenticated())
+                    .hasAnyAuthority(ROLE_AGENT, ROLE_ADMIN))
         .exceptionHandling(
             e -> e.authenticationEntryPoint(entryPoint).accessDeniedHandler(problemDenied()))
         .headers(
