@@ -72,7 +72,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {impl: java, context: ., build-args: "MODULE=ticket-mcp-server-java"}
+          # The Java server stores tickets in PostgreSQL (B7): the "local" profile adds the demo
+          # data the contract tests expect, TICKETS_DB_URL points it at the database below.
+          - impl: java
+            context: .
+            build-args: "MODULE=ticket-mcp-server-java"
+            database: true
+            run-args: >-
+              --network contract -e SPRING_PROFILES_ACTIVE=local
+              -e TICKETS_DB_URL=jdbc:postgresql://tickets-db:5432/tickets
+              -e TICKETS_DB_USER=tickets -e TICKETS_DB_PASSWORD=contract-only
           - {impl: python, context: ticket-mcp-server-python, build-args: ""}
           - {impl: rust, context: ticket-mcp-server-rust, build-args: ""}
     steps:
@@ -87,9 +96,21 @@ jobs:
           load: true
           cache-from: type=gha,scope=${{ matrix.impl }}
           cache-to: type=gha,mode=max,scope=${{ matrix.impl }}
+      - name: Start database
+        if: matrix.database
+        run: |
+          docker network create contract
+          docker run -d --name tickets-db --network contract -e POSTGRES_DB=tickets \
+            -e POSTGRES_USER=tickets -e POSTGRES_PASSWORD=contract-only postgres:17-alpine
+          # TCP check: during initdb the image's temporary server listens on the socket only.
+          for i in $(seq 1 60); do
+            docker exec tickets-db pg_isready -h 127.0.0.1 -U tickets -d tickets && exit 0
+            sleep 1
+          done
+          docker logs tickets-db; exit 1
       - name: Start server
         run: |
-          docker run -d --name server -p 8081:8081 ticket-mcp-server-${{ matrix.impl }}
+          docker run -d --name server -p 8081:8081 ${{ matrix.run-args }} ticket-mcp-server-${{ matrix.impl }}
           for i in $(seq 1 60); do
             curl -fs localhost:8081/actuator/health/readiness && exit 0
             sleep 1
