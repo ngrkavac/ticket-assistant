@@ -18,3 +18,13 @@ vulnerabilities:
     purls: ["pkg:maven/io.modelcontextprotocol.sdk/mcp-core"]
     statement: fixed only in Spring Boot 4.x / Spring AI 2.0 (MCP Java SDK 1.0.0); revisit with the Boot 4 upgrade
     expired_at: 2027-02-28
+  # spring-webflux 6.2.19 is pulled in by spring-ai-ollama (cannot be excluded); same root cause as
+  # spring-webmvc above: fixed only in Spring Framework 7.0.9, which needs Spring Boot 4.x.
+  - id: CVE-2026-47890
+    purls: ["pkg:maven/org.springframework/spring-webflux"]
+    statement: fixed only in Spring Boot 4.x (Spring Framework 7.0.9); revisit with the Boot 4 upgrade
+    expired_at: 2027-02-28
+  - id: CVE-2026-47892
+    purls: ["pkg:maven/org.springframework/spring-webflux"]
+    statement: fixed only in Spring Boot 4.x (Spring Framework 7.0.9); revisit with the Boot 4 upgrade
+    expired_at: 2027-02-28

@@ -71,23 +71,15 @@ Four commits:
 | CVE-2026-47884 | `org.springframework:spring-webmvc` 6.2.19 | fixed only in Spring Framework 7.0.9 = Spring Boot 4.x |
 | CVE-2026-47890 | `org.springframework:spring-webmvc` 6.2.19 | fixed only in Spring Framework 7.0.9 = Spring Boot 4.x |
 | CVE-2026-35568 | `io.modelcontextprotocol.sdk:mcp-core` 0.18.3 | fixed in MCP Java SDK 1.0.0, only in Spring AI 2.0 (Boot 4.x); Spring AI 1.1.8 is the newest 1.1.x |
+| CVE-2026-47890 | `org.springframework:spring-webflux` 6.2.19 (via `spring-ai-ollama`) | fixed only in Spring Framework 7.0.9 = Spring Boot 4.x |
+| CVE-2026-47892 | `org.springframework:spring-webflux` 6.2.19 (via `spring-ai-ollama`) | fixed only in Spring Framework 7.0.9 = Spring Boot 4.x |
 
 **Gate status (local Trivy 0.70.0, same flags and ignore file as the workflow):**
 - `ticket-mcp-server-java`, `request-log-mcp-server`, `ui`: **pass** (0 findings).
-- `assistant`: **still red, needs a decision.** It also contains `org.springframework:spring-webflux` 6.2.19 (pulled in by `spring-ai-ollama`, so it cannot be excluded), with **CVE-2026-47890** and **CVE-2026-47892** (both CRITICAL, fixed only in 7.0.9 = Boot 4). This is the same root cause as the accepted spring-webmvc findings, but it was not in the accepted list (the earlier scan summary missed it), so no exception was added. If you accept it, add to `.github/trivyignore.yaml`:
-  ```yaml
-    - id: CVE-2026-47890
-      purls: ["pkg:maven/org.springframework/spring-webflux"]
-      statement: fixed only in Spring Boot 4.x (Spring Framework 7.0.9); revisit with the Boot 4 upgrade
-      expired_at: 2027-02-28
-    - id: CVE-2026-47892
-      purls: ["pkg:maven/org.springframework/spring-webflux"]
-      statement: fixed only in Spring Boot 4.x (Spring Framework 7.0.9); revisit with the Boot 4 upgrade
-      expired_at: 2027-02-28
-  ```
+- `assistant`: passes once the spring-webflux exceptions (accepted by the maintainer, same root cause as spring-webmvc) are applied; added in the last commit, not re-scanned locally after that commit.
 - `ticket-mcp-server-python`: **the `python` matrix job stays red until stream B upgrades the OS packages in `ticket-mcp-server-python/Dockerfile`** (Debian `libzstd1`, HIGH, fixed in `1.5.7+dfsg-1+deb13u1`). That file is stream B's, so it is not changed here.
 
-Until both are resolved the workflow is red on `main` for those two images and publishes nothing for them; the other three images publish.
+Until stream B fixes it, the workflow is red on `main` for the `python` image and publishes nothing for it; the other four images publish.
 
 **Verified locally:** `./mvnw verify` (all modules); `cd ui && npm run lint && npm test && npm run build` (24 tests); the four images above built and scanned as described; the UI container smoke test; an expired exception fails the gate; actionlint 1.7.7 reports nothing for `images.yml` (it still flags SC2034 in `ci.yml`'s `contract` job, which is stream B's). Test images, containers and the scan cache were removed afterwards.
 
@@ -105,7 +97,7 @@ none (C9 is complete, but its `assistant` and `python` image jobs stay red until
 C12 – dependencies satisfied: yes (A7, B7, C7 merged); it uses compose, so branch from C8 if C8 is not merged yet. C10 – no (⛓ A16). C11a [L] – no (waits for S1 / A8).
 
 ## Blocked on
-nothing for C12. C9's `assistant` gate waits for a user decision on spring-webflux (CVE-2026-47890, CVE-2026-47892); its `python` gate waits for stream B (libzstd1 in `ticket-mcp-server-python/Dockerfile`). C10 waits for A16; C11a+ wait for S1 (A8).
+nothing for C12. C9's `python` gate waits for stream B (libzstd1 in `ticket-mcp-server-python/Dockerfile`). C10 waits for A16; C11a+ wait for S1 (A8).
 
 ## Notes for the next session
 - The restacked C9 lives on `prod/c9-image-pipeline-restack`. The old branch `prod/c9-image-pipeline` (11ed79a, based on `main`) could not be moved: it is checked out in the previous session's worktree `.claude/worktrees/agent-a00884f7885b99f24`, and the agent's isolation guard refuses `git update-ref`/`branch -f` on it. To restore the planned name (it was never pushed), from the main checkout: `git worktree remove .claude/worktrees/agent-a00884f7885b99f24 && git branch -f prod/c9-image-pipeline prod/c9-image-pipeline-restack && git branch -D prod/c9-image-pipeline-restack`. Or push it directly under the planned name: `git push -u origin prod/c9-image-pipeline-restack:prod/c9-image-pipeline`.
