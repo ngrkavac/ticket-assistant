@@ -38,6 +38,11 @@ class CustomerScopedToolCallbackTests {
 
   private final List<ToolContext> contexts = new CopyOnWriteArrayList<>();
 
+  /** What the wrapped tool returns, or the exception it throws when not null. */
+  private String result = "result";
+
+  private RuntimeException failure;
+
   private ToolCallback tool(String name, String schema) {
     ToolDefinition definition =
         ToolDefinition.builder().name(name).description("d").inputSchema(schema).build();
@@ -55,7 +60,10 @@ class CustomerScopedToolCallbackTests {
       @Override
       public String call(String toolInput) {
         calls.add(toolInput);
-        return "result";
+        if (failure != null) {
+          throw failure;
+        }
+        return result;
       }
 
       @Override
@@ -71,9 +79,14 @@ class CustomerScopedToolCallbackTests {
   }
 
   private static ToolContext context(String customer, Object principal) {
+    return context(customer, principal, null);
+  }
+
+  private static ToolContext context(String customer, Object principal, ToolCallAudit audit) {
     Map<String, Object> map = new HashMap<>();
     map.put(CustomerScopedToolCallback.CUSTOMER, customer);
     map.put(CustomerScopedToolCallback.PRINCIPAL, principal);
+    map.put(CustomerScopedToolCallback.AUDIT, audit);
     map.values().removeIf(v -> v == null);
     return new ToolContext(map);
   }
@@ -228,5 +241,105 @@ class CustomerScopedToolCallbackTests {
     assertThat(CustomerScopedToolCallback.takesCustomer(tool("x", "{\"type\":\"object\"}")))
         .isFalse();
     assertThat(CustomerScopedToolCallback.takesCustomer(tool("x", "not json"))).isFalse();
+  }
+
+  private static final String CREATE_SCHEMA =
+      """
+      {"type":"object","properties":{"customer":{"type":"string"},"subject":{"type":"string"},
+       "priority":{"type":"string"}}}
+      """;
+
+  private static final HelpdeskPrincipal ACME_WRITER =
+      new HelpdeskPrincipal(
+          "sub-3",
+          "acme-writer",
+          Set.of(SecurityConfig.ROLE_AGENT, SecurityConfig.ROLE_WRITER),
+          Set.of("acme"),
+          false);
+
+  private CustomerScopedToolCallback createTicket() {
+    return new CustomerScopedToolCallback(tool("createTicket", CREATE_SCHEMA), meters);
+  }
+
+  @Test
+  void writeToolsAreOfferedOnlyToUsersWithTicketsWrite() {
+    assertThat(createTicket().isWriteTool()).isTrue();
+    assertThat(createTicket().offeredTo(ACME_WRITER)).isTrue();
+    assertThat(createTicket().offeredTo(ACME_AGENT)).isFalse();
+    assertThat(createTicket().offeredTo(null)).isFalse();
+    assertThat(scoped().isWriteTool()).isFalse();
+    assertThat(scoped().offeredTo(ACME_AGENT)).isTrue();
+  }
+
+  @Test
+  void aWriteToolCalledWithoutTicketsWriteIsDeniedAndAudited() {
+    ToolCallAudit audit = new ToolCallAudit();
+    assertThatThrownBy(
+            () -> createTicket().call("{\"subject\":\"VPN\"}", context("acme", ACME_AGENT, audit)))
+        .isInstanceOf(ToolExecutionException.class)
+        .hasMessageContaining(CustomerScopedToolCallback.WRITE_DENIED);
+    assertThat(calls).isEmpty();
+    assertThat(meters.find(CustomerScopedToolCallback.DENIED_METRIC).tag("tool", "createTicket"))
+        .satisfies(c -> assertThat(c.counter().count()).isEqualTo(1));
+    assertThat(audit.calls())
+        .containsExactly(
+            new ToolCallAudit.ToolCall("createTicket", "acme", ToolCallAudit.DENIED, null));
+  }
+
+  @Test
+  void aCreatedTicketIsAuditedWithItsId() {
+    result =
+        "[{\"type\":\"text\",\"text\":\"{\\\"id\\\":\\\"T-1004\\\",\\\"customer\\\":\\\"acme\\\"}\"}]";
+    ToolCallAudit audit = new ToolCallAudit();
+    assertThat(createTicket().call("{\"subject\":\"VPN\"}", context("acme", ACME_WRITER, audit)))
+        .isEqualTo(result);
+    assertThat(audit.calls())
+        .containsExactly(
+            new ToolCallAudit.ToolCall("createTicket", "acme", ToolCallAudit.SUCCESS, "T-1004"));
+  }
+
+  @Test
+  void readToolsAreAuditedWithoutAResultId() {
+    result = "{\"id\":\"T-1001\"}";
+    ToolCallAudit audit = new ToolCallAudit();
+    scoped().call("{\"id\":\"T-1001\"}", context("acme", ACME_AGENT, audit));
+    assertThat(audit.calls())
+        .containsExactly(
+            new ToolCallAudit.ToolCall("getTicket", "acme", ToolCallAudit.SUCCESS, null));
+  }
+
+  @Test
+  void failedAndDeniedCallsAreAudited() {
+    ToolCallAudit audit = new ToolCallAudit();
+    failure = new ToolExecutionException(scoped().getToolDefinition(), new RuntimeException("x"));
+    assertThatThrownBy(() -> scoped().call("{}", context("acme", ACME_AGENT, audit)))
+        .isSameAs(failure);
+    assertThatThrownBy(
+            () -> scoped().call("{\"customer\":\"globex\"}", context("acme", ACME_AGENT, audit)))
+        .hasMessageContaining(CustomerScopedToolCallback.CUSTOMER_DENIED);
+    assertThatThrownBy(() -> scoped().call("{}", context("globex", ACME_AGENT, audit)))
+        .hasMessageContaining(CustomerScopedToolCallback.CUSTOMER_DENIED);
+    assertThat(audit.calls())
+        .containsExactly(
+            new ToolCallAudit.ToolCall("getTicket", "acme", ToolCallAudit.ERROR, null),
+            new ToolCallAudit.ToolCall("getTicket", "acme", ToolCallAudit.DENIED, null),
+            new ToolCallAudit.ToolCall("getTicket", null, ToolCallAudit.DENIED, null));
+  }
+
+  @Test
+  void resultIdReadsTheIdOfTheReturnedObject() {
+    assertThat(
+            CustomerScopedToolCallback.resultId(
+                "[{\"type\":\"text\",\"text\":\"{\\\"id\\\":\\\"T-7\\\"}\"}]"))
+        .isEqualTo("T-7");
+    assertThat(CustomerScopedToolCallback.resultId("{\"id\":\"T-8\"}")).isEqualTo("T-8");
+    assertThat(CustomerScopedToolCallback.resultId("{\"id\":42}")).isEqualTo("42");
+    assertThat(CustomerScopedToolCallback.resultId(null)).isNull();
+    assertThat(CustomerScopedToolCallback.resultId("not json")).isNull();
+    assertThat(CustomerScopedToolCallback.resultId("[]")).isNull();
+    assertThat(CustomerScopedToolCallback.resultId("[{\"text\":\"plain\"}]")).isNull();
+    assertThat(CustomerScopedToolCallback.resultId("{\"id\":{\"a\":1}}")).isNull();
+    assertThat(CustomerScopedToolCallback.resultId("{\"id\":\" \"}")).isNull();
+    assertThat(CustomerScopedToolCallback.resultId("\"T-1\"")).isNull();
   }
 }
