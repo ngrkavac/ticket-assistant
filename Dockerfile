@@ -13,15 +13,23 @@ COPY assistant/pom.xml assistant/
 # Dependencies are resolved into a BuildKit cache mount, so a pom change on the same builder only
 # downloads what is new. They are then copied into this layer as well: CI restores layers from its
 # layer cache but not cache mounts, and the package step must find them there. Flaky downloads are
-# retried (.mvn/maven.config). `locked` stops parallel image builds writing the same repository.
+# retried (.mvn/maven.config: up to 5 times after 10 s, 20 s, ...; a 429's Retry-After header wins).
+# `locked` stops parallel image builds writing the same repository.
 RUN --mount=type=cache,target=/m2cache,sharing=locked \
     ./mvnw -q -B -Dmaven.repo.local=/m2cache/repository dependency:go-offline \
  && mkdir -p /root/.m2 && cp -a /m2cache/repository /root/.m2/repository
 COPY . .
 ARG MODULE
+# go-offline does not fetch everything the build needs (e.g. some plugin dependencies and POMs
+# that only the package step resolves). This step therefore uses the same cache mount: whatever it
+# still has to download lands in /m2cache and is reused by the next build on this builder. The
+# repository copied into the image layer above is a read-only "tail", so a builder whose cache
+# mount is empty (a fresh CI runner) still finds everything go-offline fetched.
 # Pick the single executable jar for any version (SNAPSHOT or release), skipping
 # plain/sources/javadoc jars. Fail loudly if there is not exactly one candidate.
-RUN ./mvnw -q -B -DskipTests -pl ${MODULE} -am package \
+RUN --mount=type=cache,target=/m2cache,sharing=locked \
+    ./mvnw -q -B -DskipTests -Dmaven.repo.local=/m2cache/repository \
+      -Dmaven.repo.local.tail=/root/.m2/repository -pl ${MODULE} -am package \
  && jars=$(find ${MODULE}/target -maxdepth 1 -name "${MODULE}-*.jar" \
       ! -name '*-plain.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar') \
  && count=$(printf '%s\n' "$jars" | grep -c . || true) \
