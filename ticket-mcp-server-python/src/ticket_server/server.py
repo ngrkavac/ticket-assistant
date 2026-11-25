@@ -7,6 +7,7 @@ implementation exactly: bare error messages, compact JSON text results, server v
 import json
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 
 import uvicorn
@@ -15,11 +16,13 @@ from mcp.server.lowlevel import Server
 from mcp.server.sse import SseServerTransport
 from mcp.shared.exceptions import McpError
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ticket_server.auth import ServiceAuthMiddleware, parse_origins
 from ticket_server.tickets import (
     create_ticket,
     get_ticket,
@@ -185,7 +188,8 @@ class _AsgiEndpoint:
         await self.app(scope, receive, send)
 
 
-def build_app() -> Starlette:
+def build_app(env: Mapping[str, str] = os.environ) -> Starlette:
+    """The ASGI app; MCP_SERVICE_TOKEN and MCP_ALLOWED_ORIGINS are read from ``env`` (K5)."""
     server = build_mcp_server()
     sse = SseServerTransport(MESSAGE_PATH)
 
@@ -206,7 +210,14 @@ def build_app() -> Starlette:
             Route("/actuator/health", health),
             Route("/actuator/health/liveness", health),
             Route("/actuator/health/readiness", health),
-        ]
+        ],
+        middleware=[
+            Middleware(
+                ServiceAuthMiddleware,
+                token=env.get("MCP_SERVICE_TOKEN", ""),
+                allowed_origins=parse_origins(env.get("MCP_ALLOWED_ORIGINS", "")),
+            )
+        ],
     )
 
 

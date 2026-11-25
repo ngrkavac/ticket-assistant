@@ -2,11 +2,17 @@
   "mcpServers": {
     "tickets": {
       "type": "sse",
-      "url": "http://localhost:8081/sse"
+      "url": "http://localhost:8081/sse",
+      "headers": {
+        "Authorization": "Bearer ${TICKETS_MCP_TOKEN:-}"
+      }
     },
     "requestlog": {
       "type": "sse",
-      "url": "http://localhost:8082/sse"
+      "url": "http://localhost:8082/sse",
+      "headers": {
+        "Authorization": "Bearer ${REQUEST_LOG_MCP_TOKEN:-}"
+      }
     }
   }
 }

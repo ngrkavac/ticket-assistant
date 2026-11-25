@@ -19,7 +19,8 @@ async fn main() -> std::io::Result<()> {
         .expect("PORT must be a port number");
 
     let shutdown = CancellationToken::new();
-    let app = ticket_server::transport::router(shutdown.clone());
+    let auth = ticket_server::auth::ServiceAuth::from_env();
+    let app = ticket_server::transport::router(shutdown.clone(), auth);
     let listener = TcpListener::bind((host, port)).await?;
     info!(
         "ticket-mcp-server-rust listening on {}",
