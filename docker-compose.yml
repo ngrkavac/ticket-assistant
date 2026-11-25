@@ -1,8 +1,22 @@
 # COMPOSE_PROFILES=java docker compose up --build   (java | python | rust; first run pulls llama3.1, ~5 GB)
 # Then open http://localhost:5173 and sign in as a demo user (README, "Local sign-in (Keycloak)").
+#
+# Every image is pinned to a version tag plus its digest, so a rebuild or a fresh pull gets exactly
+# the tested image. Renovate keeps both up to date (renovate.json, "Docker images non-major").
+#
+# All defaults below (passwords, secrets, service tokens) are LOCAL ONLY and public. Nothing
+# except oauth2-proxy (:5173), the assistant (:8080) and Keycloak (:8180) is published, and those
+# only on 127.0.0.1.
+
+# K5: shared bearer tokens between the assistant and the MCP servers. Unused until the servers
+# check them (B9) and the assistant sends them (A14); a blank token disables the check, which only
+# the servers' "local" profile allows.
+x-tickets-mcp-token: &tickets-mcp-token ${TICKETS_MCP_TOKEN:-local-only-tickets-mcp-token}
+x-request-log-mcp-token: &request-log-mcp-token ${REQUEST_LOG_MCP_TOKEN:-local-only-request-log-mcp-token}
+
 services:
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.18@sha256:1cabd20e1762a7a8444bf4a7110b346d923cd77ab6c97c984434140638c913ec
     volumes: [ollama:/root/.ollama]
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -10,43 +24,83 @@ services:
       retries: 10
 
   ollama-pull:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.18@sha256:1cabd20e1762a7a8444bf4a7110b346d923cd77ab6c97c984434140638c913ec
     depends_on:
       ollama: {condition: service_healthy}
     environment: {OLLAMA_HOST: "http://ollama:11434"}
-    entrypoint: ["ollama", "pull", "llama3.1"]
+    # A fixed model tag (T3.6). It is the same model as "llama3.1" (= llama3.1:latest), so an
+    # existing pull is reused. OLLAMA_MODEL must name the same model here and on the assistant.
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}"]
     restart: "no"
 
   # Three interchangeable ticket MCP servers with the same contract (see ticket-mcp-contract-tests).
   # Exactly one runs, chosen by profile: COMPOSE_PROFILES=java|python|rust (or --profile ...).
   # Each answers to the network alias "ticket-mcp-server", so the assistant config never changes.
   # Not published to the host: only the assistant should reach them.
+  #
+  # java: the reference implementation, tickets stored in PostgreSQL (tickets-db, D1).
   ticket-mcp-server-java:
     profiles: [java]
     build: {context: ., args: {MODULE: ticket-mcp-server-java}}
     networks: {default: {aliases: [ticket-mcp-server]}}
+    depends_on:
+      tickets-db: {condition: service_healthy}
+    environment:
+      # "local" adds the demo customers and tickets (acme, globex, initech) on first start. Data is
+      # kept in the tickets-db volume. Without "local" the schema stays empty (as in prod).
+      SPRING_PROFILES_ACTIVE: local
+      TICKETS_DB_URL: jdbc:postgresql://tickets-db:5432/tickets
+      TICKETS_DB_USER: tickets
+      TICKETS_DB_PASSWORD: ${TICKETS_DB_PASSWORD:-local-only-tickets-db-password}
+      # K8, optional: a separate Flyway (DDL) user (B8). Blank = Flyway runs as TICKETS_DB_USER.
+      TICKETS_DB_MIGRATION_USER: ${TICKETS_DB_MIGRATION_USER:-}
+      TICKETS_DB_MIGRATION_PASSWORD: ${TICKETS_DB_MIGRATION_PASSWORD:-}
+      MCP_SERVICE_TOKEN: *tickets-mcp-token
     healthcheck: &ticket-healthcheck
       test: ["CMD-SHELL", "curl -fs localhost:8081/actuator/health/readiness || exit 1"]
       interval: 10s
       retries: 10
 
+  # python: in-memory demo tickets (lost on restart).
   ticket-mcp-server-python:
     profiles: [python]
     build: ./ticket-mcp-server-python
     networks: {default: {aliases: [ticket-mcp-server]}}
+    environment:
+      MCP_SERVICE_TOKEN: *tickets-mcp-token
     healthcheck:
       <<: *ticket-healthcheck
       # the slim Python image has no curl
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/actuator/health/readiness')"]
 
+  # rust: LEGACY reference implementation (D2), in-memory demo tickets. It stays on the SSE
+  # transport and is never deployed. Once the assistant switches to Streamable HTTP (B10/A15) it
+  # can no longer use this server: the profile is then only for running the contract tests
+  # (ticket-mcp-contract-tests, TICKETS_MCP_TRANSPORT=sse) and MCP Inspector against it.
   ticket-mcp-server-rust:
     profiles: [rust]
     build: ./ticket-mcp-server-rust
     networks: {default: {aliases: [ticket-mcp-server]}}
     healthcheck: *ticket-healthcheck
 
+  # Tickets database (D1), only for the Java ticket server. Kept apart from the request-log
+  # database, as in production, and created on the first start of its volume.
+  tickets-db:
+    profiles: [java]
+    image: postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+    environment:
+      POSTGRES_DB: tickets
+      POSTGRES_USER: tickets
+      POSTGRES_PASSWORD: ${TICKETS_DB_PASSWORD:-local-only-tickets-db-password}
+    volumes: [ticketsdata:/var/lib/postgresql/data]
+    # Not published to the host: only the Java ticket server should reach it.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tickets -d tickets"]
+      interval: 5s
+      retries: 10
+
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.12-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
     environment:
       POSTGRES_DB: requestlog
       POSTGRES_USER: requestlog
@@ -66,6 +120,13 @@ services:
       REQUEST_LOG_DB_URL: jdbc:postgresql://postgres:5432/requestlog
       REQUEST_LOG_DB_USER: requestlog
       REQUEST_LOG_DB_PASSWORD: ${REQUEST_LOG_DB_PASSWORD:?set REQUEST_LOG_DB_PASSWORD}
+      # K8, optional: a separate Flyway (DDL) user; the app user then gets DML only (B4).
+      # Blank = Flyway runs as REQUEST_LOG_DB_USER. Such a user must be created in the database.
+      REQUEST_LOG_DB_MIGRATION_USER: ${REQUEST_LOG_DB_MIGRATION_USER:-}
+      REQUEST_LOG_DB_MIGRATION_PASSWORD: ${REQUEST_LOG_DB_MIGRATION_PASSWORD:-}
+      # K8: rows older than this are purged daily (ISO-8601, at least P1D).
+      REQUEST_LOG_RETENTION: ${REQUEST_LOG_RETENTION:-P90D}
+      MCP_SERVICE_TOKEN: *request-log-mcp-token
     # Not published to the host: only the assistant should reach it.
     healthcheck:
       test: ["CMD-SHELL", "curl -fs localhost:8082/actuator/health/readiness || exit 1"]
@@ -78,7 +139,7 @@ services:
   # http://localhost:8180/realms/helpdesk, also for requests from other containers to
   # keycloak:8080 (the backchannel endpoints such as the JWKS stay on the requested host).
   keycloak:
-    image: quay.io/keycloak/keycloak:26.8.2
+    image: quay.io/keycloak/keycloak:26.8.2@sha256:7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3
     command: ["start-dev", "--import-realm"]
     environment:
       KC_HOSTNAME: http://localhost:8180
@@ -107,8 +168,11 @@ services:
       ollama-pull: {condition: service_completed_successfully}
     environment:
       OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b-instruct-q4_K_M}   # the model ollama-pull fetches
       TICKETS_MCP_URL: http://ticket-mcp-server:8081
       REQUEST_LOG_MCP_URL: http://request-log-mcp-server:8082
+      TICKETS_MCP_TOKEN: *tickets-mcp-token
+      REQUEST_LOG_MCP_TOKEN: *request-log-mcp-token
       # Every request needs a bearer access token from Keycloak (K1/K2). The tokens' issuer is the
       # browser-facing URL, which is not reachable from this container, so the signing keys are
       # fetched from Keycloak inside the compose network instead.
@@ -145,7 +209,7 @@ services:
   # browser is sent to localhost:8180 to log in, while token, keys and logout calls go to
   # keycloak:8080 inside the network.
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6@sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048
     depends_on:
       keycloak: {condition: service_healthy}
       ui: {condition: service_healthy}
@@ -191,3 +255,4 @@ volumes:
   ollama:
   models:
   pgdata:
+  ticketsdata:
