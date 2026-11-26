@@ -94,14 +94,16 @@ class AssistantService {
           customer,
           answer,
           errorType,
-          (System.nanoTime() - start) / 1_000_000);
+          (System.nanoTime() - start) / 1_000_000,
+          principal.subject(),
+          audit.toJson());
     }
   }
 
   /**
    * Every call of a write tool (e.g. {@code createTicket}) is logged with the user's subject, so
-   * created tickets can be traced to a user (T1.5). {@link ToolCallAudit#toJson()} is the K4 {@code
-   * toolCalls} value for the request log.
+   * created tickets can be traced to a user (T1.5). The request log also gets the subject and
+   * {@link ToolCallAudit#toJson()} as the K4 {@code userSubject} and {@code toolCalls}.
    */
   private static void logWrites(
       String requestId, HelpdeskPrincipal principal, ToolCallAudit audit) {

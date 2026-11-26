@@ -9,6 +9,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -20,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 
 class RequestLogClientTests {
@@ -69,7 +73,7 @@ class RequestLogClientTests {
     var log = new RequestLogClient(provider(List.of(tickets, requestLog)), props(true), meters);
     assertThat(log.enabled()).isTrue();
 
-    log.record("req-1", "How?", null, "Like this.", null, 15);
+    log.record("req-1", "How?", null, "Like this.", null, 15, null, null);
     log.destroy(); // waits for the background write
     assertThat(writes("stored")).isEqualTo(1);
 
@@ -91,7 +95,7 @@ class RequestLogClientTests {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(true).build());
     var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
-    log.record("req-2", "q", null, null, "RestClientException", 3);
+    log.record("req-2", "q", null, null, "RestClientException", 3, null, null);
     log.destroy();
 
     ArgumentCaptor<McpSchema.CallToolRequest> call =
@@ -108,7 +112,7 @@ class RequestLogClientTests {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenThrow(new IllegalStateException("connection refused"));
     var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
-    log.record("req-3", "q", null, "a", null, 1);
+    log.record("req-3", "q", null, "a", null, 1, null, null);
     log.destroy();
     verify(c).callTool(any());
     assertThat(writes("failed")).isEqualTo(1);
@@ -121,7 +125,7 @@ class RequestLogClientTests {
     ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     var log = new RequestLogClient(c, executor, meters);
     log.destroy();
-    log.record("req-4", "q", null, "a", null, 1);
+    log.record("req-4", "q", null, "a", null, 1, null, null);
     verify(c, never()).callTool(any());
     assertThat(writes("dropped")).isEqualTo(1);
   }
@@ -141,12 +145,12 @@ class RequestLogClientTests {
     // one writer thread, room for one waiting write
     var log = new RequestLogClient(c, RequestLogClient.boundedExecutor(1, 1), meters);
 
-    log.record("busy", "q", null, "a", null, 1);
+    log.record("busy", "q", null, "a", null, 1, null, null);
     assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
     long start = System.nanoTime();
-    log.record("queued", "q", null, "a", null, 1);
+    log.record("queued", "q", null, "a", null, 1, null, null);
     for (int i = 0; i < 10; i++) {
-      log.record("overflow-" + i, "q", null, "a", null, 1);
+      log.record("overflow-" + i, "q", null, "a", null, 1, null, null);
     }
     assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(1));
     assertThat(writes("dropped")).isEqualTo(10);
@@ -173,7 +177,7 @@ class RequestLogClientTests {
   void disabledLoggingDoesNothing() {
     var log = new RequestLogClient(provider(List.of()), props(false), meters);
     assertThat(log.enabled()).isFalse();
-    log.record("req-5", "q", null, "a", null, 1);
+    log.record("req-5", "q", null, "a", null, 1, null, null);
     log.destroy();
   }
 
@@ -241,13 +245,91 @@ class RequestLogClientTests {
     McpSyncClient c = client("requestlog");
     when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(false).build());
     var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
-    log.record("req-6", "q", "globex", "a", null, 1);
+    log.record("req-6", "q", "globex", "a", null, 1, null, null);
     log.destroy();
 
     ArgumentCaptor<McpSchema.CallToolRequest> call =
         ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
     verify(c).callTool(call.capture());
     assertThat(call.getValue().arguments()).containsEntry("customer", "globex");
+  }
+
+  @Test
+  void sendsTheUserSubjectAndToolCallsPerK4() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(false).build());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
+    String toolCalls = "[{\"tool\":\"getTicket\",\"customer\":\"acme\",\"outcome\":\"success\"}]";
+    log.record("req-7", "q", "acme", "a", null, 1, " sub-1 ", toolCalls);
+    log.destroy();
+
+    ArgumentCaptor<McpSchema.CallToolRequest> call =
+        ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
+    verify(c).callTool(call.capture());
+    assertThat(call.getValue().arguments())
+        .containsEntry("userSubject", "sub-1")
+        .containsEntry("toolCalls", toolCalls)
+        .containsOnlyKeys(
+            "requestId",
+            "question",
+            "answer",
+            "status",
+            "errorType",
+            "durationMs",
+            "customer",
+            "userSubject",
+            "toolCalls");
+  }
+
+  @Test
+  void aRejectedWriteLogsOnlyTheRequestId() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any()))
+        .thenReturn(McpSchema.CallToolResult.builder().isError(true).build())
+        .thenThrow(new IllegalStateException("secret question"));
+    Logger logger = (Logger) LoggerFactory.getLogger(RequestLogClient.class);
+    ListAppender<ILoggingEvent> events = new ListAppender<>();
+    events.start();
+    logger.addAppender(events);
+    try {
+      var log = new RequestLogClient(c, Executors.newSingleThreadExecutor(), meters);
+      String toolCalls = "[{\"tool\":\"createTicket\",\"outcome\":\"success\"}]";
+      log.record("req-9", "secret question", "acme", "a", null, 1, "sub-secret", toolCalls);
+      log.record("req-10", "secret question", "acme", "a", null, 1, "sub-secret", toolCalls);
+      log.destroy();
+    } finally {
+      logger.detachAppender(events);
+    }
+    assertThat(events.list).hasSize(2);
+    assertThat(events.list)
+        .allSatisfy(
+            e ->
+                assertThat(e.getFormattedMessage())
+                    .doesNotContain("secret")
+                    .doesNotContain("createTicket"));
+  }
+
+  @Test
+  void leavesOutAMissingUserSubjectAndToolCalls() {
+    McpSyncClient c = client("requestlog");
+    when(c.callTool(any())).thenReturn(McpSchema.CallToolResult.builder().isError(false).build());
+    var log = new RequestLogClient(c, Executors.newVirtualThreadPerTaskExecutor(), meters);
+    log.record("req-8", "q", "acme", "a", null, 1, "  ", "");
+    log.destroy();
+
+    ArgumentCaptor<McpSchema.CallToolRequest> call =
+        ArgumentCaptor.forClass(McpSchema.CallToolRequest.class);
+    verify(c).callTool(call.capture());
+    assertThat(call.getValue().arguments()).doesNotContainKeys("userSubject", "toolCalls");
+  }
+
+  @Test
+  void shortensALongUserSubjectToTheServerLimit() {
+    assertThat(RequestLogClient.userSubject(null)).isNull();
+    assertThat(RequestLogClient.userSubject(" ")).isNull();
+    assertThat(RequestLogClient.userSubject(" sub ")).isEqualTo("sub");
+    assertThat(RequestLogClient.userSubject("x".repeat(300)))
+        .hasSize(RequestLogClient.MAX_USER_SUBJECT_LENGTH);
   }
 
   @Test
