@@ -1,0 +1,70 @@
+name: Maven seed
+description: >-
+  Resolves the Maven dependencies of all Java modules once per pom change and keeps them in the
+  GitHub Actions cache. The result is a Maven home (repository/ plus the wrapper's wrapper/) that the
+  root Dockerfile takes as its maven-seed build context, so image builds do not download the
+  dependency set from Maven Central again (parallel downloads get 429 Too Many Requests).
+inputs:
+  download-on-hit:
+    description: >-
+      "false" only checks that the seed is cached and downloads nothing when it is (for a job that
+      just makes sure the cache exists). Anything else restores it into the seed directory.
+    default: "true"
+outputs:
+  dir:
+    description: The seed directory (absolute), for --build-context maven-seed=<dir>.
+    value: ${{ steps.vars.outputs.dir }}
+  key:
+    description: The cache key of the seed, for actions/cache/restore in other jobs.
+    value: ${{ steps.vars.outputs.key }}
+  cache-hit:
+    description: '"true" when the seed for these poms was already cached (nothing was resolved).'
+    value: ${{ steps.exact.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    # The key changes with any pom or the Maven version. Bump v1 to start from an empty seed: it
+    # grows a little with each pom change, because a changed pom starts from the previous seed.
+    - id: vars
+      shell: bash
+      env:
+        HASH: ${{ hashFiles('pom.xml', '*/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+      run: |
+        echo "dir=${RUNNER_TEMP}/maven-seed" >> "$GITHUB_OUTPUT"
+        echo "key=maven-seed-v1-${RUNNER_OS}-${HASH}" >> "$GITHUB_OUTPUT"
+    # Exact key only. With download-on-hit "false" this is a lookup that downloads nothing.
+    - id: exact
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.vars.outputs.dir }}
+        key: ${{ steps.vars.outputs.key }}
+        lookup-only: ${{ inputs.download-on-hit == 'false' }}
+    # Miss: start from the newest older seed, so a pom change downloads only what is new.
+    - if: steps.exact.outputs.cache-hit != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.vars.outputs.dir }}
+        key: ${{ steps.vars.outputs.key }}
+        restore-keys: maven-seed-v1-${{ runner.os }}-
+    - if: steps.exact.outputs.cache-hit != 'true'
+      uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+      with: {distribution: temurin, java-version: 21}
+    # The goals the Dockerfile runs (go-offline, then package without tests), so the seed holds
+    # everything the image builds resolve. `timeout` caps a rate-limited run at minutes.
+    - if: steps.exact.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        MAVEN_USER_HOME: ${{ steps.vars.outputs.dir }}
+      run: |
+        repo="$MAVEN_USER_HOME/repository"
+        before=$(find "$repo" -name '*.pom' 2>/dev/null | wc -l)
+        timeout 15m ./mvnw -B -ntp -Dmaven.repo.local="$repo" dependency:go-offline
+        timeout 15m ./mvnw -B -ntp -Dmaven.repo.local="$repo" -DskipTests package
+        after=$(find "$repo" -name '*.pom' | wc -l)
+        echo "maven-seed: ${before} POMs restored, $((after - before)) downloaded," \
+          "$(du -sh "$MAVEN_USER_HOME" | cut -f1) in total"
+    - if: steps.exact.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.vars.outputs.dir }}
+        key: ${{ steps.vars.outputs.key }}
