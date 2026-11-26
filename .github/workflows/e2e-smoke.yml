@@ -15,6 +15,8 @@ on:
       - docker-compose.yml
       - Dockerfile
       - .dockerignore
+      - .mvn/**
+      - .github/actions/maven-seed/**
       - ui/Dockerfile
       - ui/nginx.conf.template
       - ticket-mcp-server-python/Dockerfile
@@ -55,8 +57,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
+      # The Java modules' Maven dependencies, resolved once per pom change and cached, so the image
+      # builds do not download them from Maven Central (which rate-limits with 429).
+      - id: seed
+        uses: ./.github/actions/maven-seed
       - name: Build images
-        run: docker compose build
+        # The timeout makes a build stuck on rate-limited downloads fail in minutes.
+        timeout-minutes: 20
+        env: {MAVEN_SEED_DIR: "${{ steps.seed.outputs.dir }}"}
+        run: docker compose -f docker-compose.yml -f .github/e2e/compose.maven-seed.yml build
       - name: Start the stack
         # --wait: every container healthy (ollama-pull: completed). The UI only starts once the
         # assistant is ready, which needs the model, both MCP servers and the embedding model.

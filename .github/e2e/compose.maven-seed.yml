@@ -1,0 +1,10 @@
+# Used by the E2E smoke job only: passes the cached Maven dependencies (.github/actions/maven-seed)
+# to the root Dockerfile's maven-seed stage, so the Java images do not download them from Maven
+# Central. MAVEN_SEED_DIR is the seed directory (absolute path).
+services:
+  ticket-mcp-server-java:
+    build: {additional_contexts: {maven-seed: "${MAVEN_SEED_DIR:?}"}}
+  request-log-mcp-server:
+    build: {additional_contexts: {maven-seed: "${MAVEN_SEED_DIR:?}"}}
+  assistant:
+    build: {additional_contexts: {maven-seed: "${MAVEN_SEED_DIR:?}"}}
