@@ -1,0 +1,73 @@
+name: E2E smoke
+# T6.5: start the whole docker-compose stack (Keycloak, oauth2-proxy, UI, assistant, MCP servers,
+# PostgreSQL, Ollama) and drive it like a browser with .github/e2e/smoke.sh: sign-in -> /customers
+# -> /ask -> history row, plus the cross-customer 403.
+#
+# Ollama runs for real with a tiny model (qwen2.5:0.5b, ~400 MB, tool calling supported) instead
+# of the 5 GB llama3.1, so the smoke test covers the real Ollama API and Spring AI's tool-calling
+# loop. The test asserts wiring (status codes, a non-empty answer, the history row), never what
+# the model says, so the small model's answer quality does not matter.
+on:
+  # Only pull requests that touch the wiring: compose, images, proxy/nginx, Keycloak realm,
+  # application config, dependencies, and this test itself.
+  pull_request:
+    paths:
+      - docker-compose.yml
+      - Dockerfile
+      - .dockerignore
+      - ui/Dockerfile
+      - ui/nginx.conf.template
+      - ticket-mcp-server-python/Dockerfile
+      - deploy/keycloak/**
+      - pom.xml
+      - '*/pom.xml'
+      - '*/src/main/resources/application*.properties'
+      - assistant/src/main/java/com/example/assistant/SecurityConfig.java
+      - assistant/src/main/java/com/example/assistant/HelpdeskJwtConverter.java
+      - .github/e2e/**
+      - .github/workflows/e2e-smoke.yml
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Ticket MCP server (compose profile)
+        type: choice
+        options: [java, python]
+        default: java
+      model:
+        description: Ollama chat model
+        type: string
+        default: qwen2.5:0.5b
+permissions:
+  contents: read
+concurrency:
+  group: e2e-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      COMPOSE_PROJECT_NAME: e2e
+      COMPOSE_PROFILES: ${{ inputs.profile || 'java' }}
+      OLLAMA_MODEL: ${{ inputs.model || 'qwen2.5:0.5b' }}
+      # Throwaway secret for this run's database; everything else uses compose's local-only defaults.
+      REQUEST_LOG_DB_PASSWORD: e2e-only-request-log-password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Build images
+        run: docker compose build
+      - name: Start the stack
+        # --wait: every container healthy (ollama-pull: completed). The UI only starts once the
+        # assistant is ready, which needs the model, both MCP servers and the embedding model.
+        run: docker compose up --detach --wait --wait-timeout 900
+      - name: Smoke test
+        run: bash .github/e2e/smoke.sh
+      - name: Container status and logs
+        if: failure()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --timestamps
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
