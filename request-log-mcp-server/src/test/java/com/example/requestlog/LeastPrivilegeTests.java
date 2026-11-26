@@ -9,6 +9,7 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -47,6 +48,13 @@ class LeastPrivilegeTests {
   }
 
   @Autowired DataSource dataSource;
+
+  @Autowired Environment environment;
+
+  @Test
+  void prodLogsAreJson() {
+    assertThat(environment.getProperty("logging.structured.format.console")).isEqualTo("ecs");
+  }
 
   @Test
   void poolHasTheConfiguredSizeAndFailsFast() {

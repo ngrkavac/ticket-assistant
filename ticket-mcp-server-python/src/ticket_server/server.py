@@ -5,7 +5,6 @@ implementation exactly: bare error messages, compact JSON text results, server v
 """
 
 import json
-import logging
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -23,6 +22,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ticket_server.auth import ServiceAuthMiddleware, parse_origins
+from ticket_server.logs import configure_logging
 from ticket_server.tickets import (
     create_ticket,
     get_ticket,
@@ -221,13 +221,12 @@ def build_app(env: Mapping[str, str] = os.environ) -> Starlette:
     )
 
 
-app = build_app()
-
-
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # Logging first, so warnings from build_app() already use the configured format.
+    configure_logging(os.environ)
     uvicorn.run(
-        app,
+        build_app(),
+        log_config=None,
         host=os.environ.get("HOST", "0.0.0.0"),
         port=int(os.environ.get("PORT", "8081")),
         timeout_graceful_shutdown=10,
