@@ -265,12 +265,12 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **A6** (T1.2) Map the JWT to a principal (roles, allowed customers) per K1.
 - [x] **A7** (T1.3) Endpoint authorization per K3.
 - [x] **A8** **[L]** (T1.4) `CustomerScopedToolCallback` using the ToolContext. Hide `listCustomers` from the model and stop sending the customer as user text.
-- [ ] **A9** (T1.5) Filter tools per request, so `createTicket` is offered only to users with `tickets-write`. Collect tool-call audit records.
+- [x] **A9** (T1.5) Filter tools per request, so `createTicket` is offered only to users with `tickets-write`. Collect tool-call audit records.
 - [ ] **A10** (T1.5, T1.6, client side) Send `userSubject` and `toolCalls` per K4. ⛓ B3.
 - [ ] **A11** (T1.8) Per-user rate limit with Bucket4j (`RATE_LIMIT_ASKS_PER_MINUTE`).
 - [ ] **A12** (T1.9) Auth/authz test matrix (endpoint × role × customer) and a cross-customer integration test with a fake model.
 - [ ] **A13** (T3.3) Health indicators `ticketsMcp`, `requestLogMcp` and `ollama`; readiness group.
-- [ ] **A14** (T3.4, client side) Send the service tokens per K5. Harmless before B9 merges.
+- [x] **A14** (T3.4, client side) Send the service tokens per K5. Harmless before B9 merges.
 - [ ] **A15** **[L]** (T3.1 client side + T3.2) Streamable HTTP connections, lazy MCP initialization and reconnect, with a test that restarts a server. ⛓ merges together with B10 (S2).
 - [ ] **A16** (T3.5, config side) Make the embedding model and tokenizer URIs configurable (`EMBEDDING_MODEL_URI`, `EMBEDDING_TOKENIZER_URI`).
 - [ ] **A17** (T4.1, T4.2, T4.4) For the assistant: JSON logs in `prod`, OTel tracing, and business metrics per K9.
@@ -287,10 +287,10 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **B6** (T2.6) Hikari and statement timeouts for the request log.
 - [x] **B7** **[L]** (T2.1) Postgres-backed `TicketTools`: Flyway schema, sequence-based ids, demo seed only in `local`. Add Testcontainers tests; the contract tests must still pass. ⛓ C8 for compose (until then, use Testcontainers).
 - [x] **B8** (T2.3, T2.6) Least-privilege DB users and timeouts for the ticket server.
-- [ ] **B9** (T3.4, server side) Service-token filter and Origin check per K5 on both Java servers and the Python server (and Rust, if it is kept).
+- [x] **B9** (T3.4, server side) Service-token filter and Origin check per K5 on both Java servers and the Python server (and Rust, if it is kept).
 - [ ] **B10** **[L]** (T3.1, server side) Streamable HTTP on the Java and Python servers. Rust stays on SSE (D2). Make the contract tests transport-selectable, update the `contract` CI job (Rust runs with `sse`) and `.mcp.json`, and write `ticket-mcp-server-rust/README.md` documenting its legacy status. ⛓ merges together with A15 (S2).
-- [ ] **B11** (T4.1, T4.2, T4.3) For the MCP servers: JSON logs in `prod`, tracing, and `/actuator/prometheus`.
-- [ ] **B12** (T5.8) `prod` profiles with fail-fast validation on both Java servers.
+- [x] **B11** (T4.1, T4.2, T4.3) For the MCP servers: JSON logs in `prod`, tracing, and `/actuator/prometheus`.
+- [x] **B12** (T5.8) `prod` profiles with fail-fast validation on both Java servers.
 - [ ] **B13** (T6.4) k6 load-test script `perf/ask.js` and a results template. It runs against staging after C11c.
 
 ### Stream C: Platform & UI
@@ -311,7 +311,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [ ] **C11a** **[L]** (T5.1, T5.2, T5.3) Helm chart skeleton covering all services, probes per K7, resources, PDB/HPA, values for staging and prod, and `helm lint` plus `kubeconform` in CI.
 - [ ] **C11b** **[L]** (T5.4–T5.7) Security contexts, ServiceAccounts, NetworkPolicies, Ingress with TLS and security headers, External Secrets.
 - [ ] **C11c** **[L]** (T3.6, T3.7, T2.7) Ollama StatefulSet with a GPU node pool, model-pull Job and PVC; KB ConfigMap with a checksum roll; Postgres via CloudNativePG or a managed service, with backups.
-- [ ] **C12** (T6.5) E2E smoke job: compose, a tiny Ollama model and a Keycloak test user. ⛓ A7, B7, C7.
+- [x] **C12** (T6.5) E2E smoke job: compose, a tiny Ollama model and a Keycloak test user. ⛓ A7, B7, C7.
 - [ ] **C13** (T6.7) Release workflow (tags → images → chart; staging automatic, prod with manual approval) and the nightly eval workflow for A20.
 - [ ] **C14** (T7.1, T7.2) `docs/RUNBOOK.md` and `docs/SECURITY.md`.
 - [ ] **C15** (T7.3) Final README and `HOW_IT_WORKS.md` update, folding in the "README needs" notes from stream A and B PRs. This is the last task overall.
