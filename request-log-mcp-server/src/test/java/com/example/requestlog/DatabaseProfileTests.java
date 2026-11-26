@@ -49,8 +49,7 @@ class DatabaseProfileTests {
                     "--REQUEST_LOG_DB_URL=jdbc:h2:mem:prodguard;DB_CLOSE_DELAY=-1",
                     "--REQUEST_LOG_DB_USER=sa",
                     "--REQUEST_LOG_DB_PASSWORD="))
-        .hasStackTraceContaining(
-            "must be a jdbc:postgresql: URL in the prod profile, got jdbc:h2:");
+        .hasStackTraceContaining("REQUEST_LOG_DB_URL must be a jdbc:postgresql: URL, got jdbc:h2:");
   }
 
   @Test
@@ -60,10 +59,17 @@ class DatabaseProfileTests {
   }
 
   @Test
-  void guardAcceptsPostgresInProdAndAnyUrlOutsideProd() {
-    assertThatCode(() -> DatabaseUrlGuard.check("jdbc:postgresql://db:5432/requestlog", true))
+  void defaultProfileNeedsOnlyTheDatabaseUrl() {
+    // Compose runs without a profile: no token, no migration user, any database URL.
+    assumeTrue(System.getenv("MCP_SERVICE_TOKEN") == null, "MCP_SERVICE_TOKEN is set");
+    assertThatCode(
+            () ->
+                start(
+                    null,
+                    "--REQUEST_LOG_DB_URL=jdbc:h2:mem:defaultprofile;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                    "--REQUEST_LOG_DB_USER=sa",
+                    "--REQUEST_LOG_DB_PASSWORD="))
         .doesNotThrowAnyException();
-    assertThatCode(() -> DatabaseUrlGuard.check("jdbc:h2:mem:x", false)).doesNotThrowAnyException();
   }
 
   @Test
@@ -76,26 +82,11 @@ class DatabaseProfileTests {
     };
     assumeTrue(System.getenv("REQUEST_LOG_DB_MIGRATION_USER") == null, "migration user is set");
     assertThatThrownBy(() -> start("prod", database))
-        .hasStackTraceContaining("REQUEST_LOG_DB_MIGRATION_USER and")
-        .hasStackTraceContaining("must be set in the prod profile");
+        .hasStackTraceContaining("REQUEST_LOG_DB_MIGRATION_USER must be set");
     String[] sameUser = Arrays.copyOf(database, database.length + 1);
     sameUser[database.length] = "--REQUEST_LOG_DB_MIGRATION_USER=requestlog_app";
     assertThatThrownBy(() -> start("prod", sameUser))
         .hasStackTraceContaining("must differ from REQUEST_LOG_DB_USER");
-  }
-
-  @Test
-  void guardChecksTheMigrationUser() {
-    assertThatThrownBy(() -> DatabaseUrlGuard.checkMigrationUser(null, "app"))
-        .hasMessageContaining("must be set");
-    assertThatThrownBy(() -> DatabaseUrlGuard.checkMigrationUser(" ", "app"))
-        .hasMessageContaining("must be set");
-    assertThatThrownBy(() -> DatabaseUrlGuard.checkMigrationUser("app", "app"))
-        .hasMessageContaining("must differ");
-    assertThatCode(() -> DatabaseUrlGuard.checkMigrationUser("migrator", "app"))
-        .doesNotThrowAnyException();
-    assertThatCode(() -> DatabaseUrlGuard.checkMigrationUser("migrator", null))
-        .doesNotThrowAnyException();
   }
 
   @Test
@@ -109,14 +100,13 @@ class DatabaseProfileTests {
   }
 
   @Test
-  void guardRejectsMissingAndUnknownUrls() {
-    assertThatThrownBy(() -> DatabaseUrlGuard.check("  ", false))
+  void guardRejectsMissingUrls() {
+    assertThatThrownBy(() -> DatabaseUrlGuard.check(null))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining(MISSING_URL);
-    assertThatThrownBy(() -> DatabaseUrlGuard.check("${REQUEST_LOG_DB_URL}", false))
+    assertThatThrownBy(() -> DatabaseUrlGuard.check("  ")).hasMessageContaining(MISSING_URL);
+    assertThatThrownBy(() -> DatabaseUrlGuard.check("${REQUEST_LOG_DB_URL}"))
         .hasMessageContaining(MISSING_URL);
-    assertThatThrownBy(() -> DatabaseUrlGuard.check("postgres", true))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageEndingWith("got an unknown scheme");
+    assertThatCode(() -> DatabaseUrlGuard.check("jdbc:h2:mem:x")).doesNotThrowAnyException();
   }
 }

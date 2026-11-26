@@ -75,8 +75,7 @@ class DatabaseProfileTests {
                         "--TICKETS_DB_USER=sa",
                         "--TICKETS_DB_PASSWORD=")
                     .close())
-        .hasStackTraceContaining(
-            "must be a jdbc:postgresql: URL in the prod profile, got jdbc:h2:");
+        .hasStackTraceContaining("TICKETS_DB_URL must be a jdbc:postgresql: URL, got jdbc:h2:");
   }
 
   @Test
@@ -89,7 +88,8 @@ class DatabaseProfileTests {
                         "--TICKETS_DB_USER=tickets_app",
                         "--TICKETS_DB_PASSWORD=app-secret")
                     .close())
-        .hasStackTraceContaining("TICKETS_DB_MIGRATION_USER and TICKETS_DB_MIGRATION_PASSWORD");
+        .hasStackTraceContaining("TICKETS_DB_MIGRATION_USER must be set")
+        .hasStackTraceContaining("TICKETS_DB_MIGRATION_PASSWORD must be set");
     assertThatThrownBy(
             () ->
                 start(
@@ -103,25 +103,27 @@ class DatabaseProfileTests {
   }
 
   @Test
-  void guardAcceptsADistinctMigrationUser() {
-    assertThatCode(() -> TicketsDatabaseUrlGuard.checkMigrationUser("tickets_migrator", "app"))
-        .doesNotThrowAnyException();
-    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.checkMigrationUser(" ", "app"))
-        .hasMessageContaining("must be set in the prod profile");
+  void guardRejectsMissingUrls() {
+    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.check(null)).hasMessageContaining(MISSING_URL);
+    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.check(" ")).hasMessageContaining(MISSING_URL);
+    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.check("${TICKETS_DB_URL}"))
+        .hasMessageContaining(MISSING_URL);
+    assertThatCode(() -> TicketsDatabaseUrlGuard.check("jdbc:h2:mem:x")).doesNotThrowAnyException();
   }
 
   @Test
-  void guardAcceptsPostgresAndHidesUnknownSchemes() {
-    assertThatCode(() -> TicketsDatabaseUrlGuard.check("jdbc:postgresql://db/tickets", true))
+  void defaultProfileNeedsOnlyTheDatabaseUrl() {
+    // Compose runs without a profile: no token, no migration user, any database URL.
+    assumeTrue(System.getenv("MCP_SERVICE_TOKEN") == null, "MCP_SERVICE_TOKEN is set");
+    assertThatCode(
+            () ->
+                start(
+                        null,
+                        "--TICKETS_DB_URL=jdbc:h2:mem:defaultprofile;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                        "--TICKETS_DB_USER=sa",
+                        "--TICKETS_DB_PASSWORD=")
+                    .close())
         .doesNotThrowAnyException();
-    assertThatCode(() -> TicketsDatabaseUrlGuard.check("jdbc:h2:mem:x", false))
-        .doesNotThrowAnyException();
-    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.check("secret-url", true))
-        .hasMessageEndingWith("got an unknown scheme");
-    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.check(" ", false))
-        .hasMessageContaining(MISSING_URL);
-    assertThatThrownBy(() -> TicketsDatabaseUrlGuard.check("${TICKETS_DB_URL}", false))
-        .hasMessageContaining(MISSING_URL);
   }
 
   @Test
