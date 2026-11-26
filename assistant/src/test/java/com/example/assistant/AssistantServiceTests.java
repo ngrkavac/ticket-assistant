@@ -160,11 +160,22 @@ class AssistantServiceTests {
             .getToolContext()
             .get(CustomerScopedToolCallback.AUDIT);
     assertThat(audit).isInstanceOf(ToolCallAudit.class);
-    assertThat(((ToolCallAudit) audit).toJson())
-        .isEqualTo(
-            "[{\"tool\":\"getTicket\",\"customer\":\"acme\",\"outcome\":\"success\"},"
-                + "{\"tool\":\"createTicket\",\"customer\":\"acme\",\"outcome\":\"success\","
-                + "\"resultId\":\"T-1004\"}]");
+    String expected =
+        "[{\"tool\":\"getTicket\",\"customer\":\"acme\",\"outcome\":\"success\"},"
+            + "{\"tool\":\"createTicket\",\"customer\":\"acme\",\"outcome\":\"success\","
+            + "\"resultId\":\"T-1004\"}]";
+    assertThat(((ToolCallAudit) audit).toJson()).isEqualTo(expected);
+    // the request log gets the user's subject and the same K4 toolCalls JSON
+    verify(log)
+        .record(
+            anyString(),
+            eq("open a ticket"),
+            eq("acme"),
+            eq("created"),
+            isNull(),
+            anyLong(),
+            eq("sub-2"),
+            eq(expected));
   }
 
   @Test
@@ -259,7 +270,16 @@ class AssistantServiceTests {
     } finally {
       MDC.remove("requestId");
     }
-    verify(log).record(eq("req-1"), eq("hi"), eq("acme"), eq("hello"), isNull(), anyLong());
+    verify(log)
+        .record(
+            eq("req-1"),
+            eq("hi"),
+            eq("acme"),
+            eq("hello"),
+            isNull(),
+            anyLong(),
+            eq("sub-1"),
+            isNull());
   }
 
   @Test
@@ -274,7 +294,14 @@ class AssistantServiceTests {
         .isInstanceOf(IllegalStateException.class);
     verify(log)
         .record(
-            anyString(), eq("boom"), eq("acme"), isNull(), eq("IllegalStateException"), anyLong());
+            anyString(),
+            eq("boom"),
+            eq("acme"),
+            isNull(),
+            eq("IllegalStateException"),
+            anyLong(),
+            eq("sub-1"),
+            isNull());
   }
 
   @Test
@@ -287,7 +314,7 @@ class AssistantServiceTests {
     } finally {
       Thread.interrupted();
     }
-    verify(log, never()).record(any(), any(), any(), any(), any(), anyLong());
+    verify(log, never()).record(any(), any(), any(), any(), any(), anyLong(), any(), any());
   }
 
   @Test

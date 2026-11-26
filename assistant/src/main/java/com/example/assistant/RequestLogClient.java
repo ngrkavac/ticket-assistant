@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 /**
@@ -40,6 +41,9 @@ class RequestLogClient implements DisposableBean {
   static final String LIST_QUESTIONS_TOOL = "listQuestions";
 
   static final String ADD_QUESTION_TOOL = "addQuestion";
+
+  /** The request-log server's limit for {@code userSubject} (K4). */
+  static final int MAX_USER_SUBJECT_LENGTH = 255;
 
   static final String WRITES_METRIC = "helpdesk.requestlog.writes";
 
@@ -140,13 +144,21 @@ class RequestLogClient implements DisposableBean {
     return client != null;
   }
 
+  /**
+   * Stores one request in the background. {@code userSubject} (the caller's JWT {@code sub}) and
+   * {@code toolCalls} (a K4 JSON array from {@link ToolCallAudit#toJson()}) are optional and sent
+   * only when present. The subject is shortened to {@value #MAX_USER_SUBJECT_LENGTH} characters,
+   * the server's limit, so an unusually long one cannot make the server reject the whole entry.
+   */
   void record(
       String requestId,
       String question,
       String customer,
       String answer,
       String errorType,
-      long durationMs) {
+      long durationMs,
+      @Nullable String userSubject,
+      @Nullable String toolCalls) {
     if (client == null) {
       return;
     }
@@ -158,12 +170,29 @@ class RequestLogClient implements DisposableBean {
     args.put("errorType", errorType);
     args.put("durationMs", durationMs);
     args.put("customer", customer);
+    String subject = userSubject(userSubject);
+    if (subject != null) {
+      args.put("userSubject", subject);
+    }
+    if (toolCalls != null && !toolCalls.isBlank()) {
+      args.put("toolCalls", toolCalls);
+    }
     try {
       executor.execute(() -> send(requestId, args));
     } catch (RejectedExecutionException e) { // queue full or shutting down
       dropped.increment();
       log.warn("Request {} not stored: request-log write queue is full or closed", requestId);
     }
+  }
+
+  /** Null when blank; otherwise trimmed and at most {@value #MAX_USER_SUBJECT_LENGTH} chars. */
+  @Nullable
+  static String userSubject(@Nullable String subject) {
+    if (subject == null || subject.isBlank()) {
+      return null;
+    }
+    String s = subject.trim();
+    return s.length() > MAX_USER_SUBJECT_LENGTH ? s.substring(0, MAX_USER_SUBJECT_LENGTH) : s;
   }
 
   private void send(String requestId, Map<String, Object> args) {
