@@ -57,7 +57,10 @@ runs:
         MAVEN_USER_HOME: ${{ steps.vars.outputs.dir }}
       run: |
         repo="$MAVEN_USER_HOME/repository"
-        before=$(find "$repo" -name '*.pom' 2>/dev/null | wc -l)
+        # On a cold cache the repository does not exist yet; with -o pipefail a failing find
+        # would end the step, so create it first.
+        mkdir -p "$repo"
+        before=$(find "$repo" -name '*.pom' | wc -l)
         timeout 15m ./mvnw -B -ntp -Dmaven.repo.local="$repo" dependency:go-offline
         timeout 15m ./mvnw -B -ntp -Dmaven.repo.local="$repo" -DskipTests package
         after=$(find "$repo" -name '*.pom' | wc -l)
