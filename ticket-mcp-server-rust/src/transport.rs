@@ -24,6 +24,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+use crate::auth::{self, ServiceAuth};
 use crate::protocol;
 use crate::tickets::TicketStore;
 
@@ -40,8 +41,9 @@ struct AppState {
 }
 
 /// Builds the HTTP app. Cancelling `shutdown` ends all open SSE streams, so a graceful
-/// server shutdown is not held up by connected clients.
-pub fn router(shutdown: CancellationToken) -> Router {
+/// server shutdown is not held up by connected clients. `auth` guards every route except the
+/// probes (see [`crate::auth`]).
+pub fn router(shutdown: CancellationToken, auth: ServiceAuth) -> Router {
     let state = AppState {
         sessions: Arc::default(),
         shutdown,
@@ -54,6 +56,7 @@ pub fn router(shutdown: CancellationToken) -> Router {
         .route("/actuator/health/liveness", get(health))
         .route("/actuator/health/readiness", get(health))
         .with_state(state)
+        .layer(axum::middleware::from_fn_with_state(auth, auth::require))
 }
 
 async fn health() -> Json<Value> {
@@ -148,7 +151,11 @@ mod tests {
     use tower::ServiceExt;
 
     async fn send(request: Request<Body>) -> (StatusCode, String) {
-        let response = router(CancellationToken::new())
+        send_with(ServiceAuth::default(), request).await
+    }
+
+    async fn send_with(auth: ServiceAuth, request: Request<Body>) -> (StatusCode, String) {
+        let response = router(CancellationToken::new(), auth)
             .oneshot(request)
             .await
             .unwrap();
@@ -180,5 +187,91 @@ mod tests {
     async fn message_without_session_is_a_bad_request() {
         let request = Request::post("/mcp/message").body(Body::empty()).unwrap();
         assert_eq!(send(request).await.0, StatusCode::BAD_REQUEST);
+    }
+
+    fn secured() -> ServiceAuth {
+        ServiceAuth::new(
+            "s3cret-token",
+            "http://localhost:6274, https://inspector.example",
+        )
+    }
+
+    fn message(headers: &[(&str, &str)]) -> Request<Body> {
+        // No session id: the transport itself answers 400 once auth let the request pass.
+        let mut request = Request::post(MESSAGE_PATH);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn requests_without_the_token_get_401() {
+        let response = router(CancellationToken::new(), secured())
+            .oneshot(Request::get(SSE_PATH).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()["www-authenticate"], "Bearer");
+        for value in [
+            "Bearer wrong",
+            "Basic s3cret-token",
+            "Bearer s3cret-token-and-more",
+        ] {
+            let status = send_with(secured(), message(&[("authorization", value)])).await;
+            assert_eq!(status.0, StatusCode::UNAUTHORIZED, "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn requests_with_the_token_reach_the_mcp_endpoints() {
+        for value in ["Bearer s3cret-token", "bearer s3cret-token"] {
+            let status = send_with(secured(), message(&[("authorization", value)])).await;
+            assert_eq!(status.0, StatusCode::BAD_REQUEST, "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_origins_are_rejected_even_with_the_token() {
+        let evil = message(&[
+            ("authorization", "Bearer s3cret-token"),
+            ("origin", "https://evil.example"),
+        ]);
+        assert_eq!(send_with(secured(), evil).await.0, StatusCode::FORBIDDEN);
+        let null = message(&[("origin", "null")]);
+        assert_eq!(send_with(secured(), null).await.0, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn allowed_origins_still_need_the_token() {
+        let without = message(&[("origin", "https://inspector.example")]);
+        assert_eq!(
+            send_with(secured(), without).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let with = message(&[
+            ("origin", "http://localhost:6274"),
+            ("authorization", "Bearer s3cret-token"),
+        ]);
+        assert_eq!(send_with(secured(), with).await.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn probes_need_no_token() {
+        let request = Request::get("/actuator/health/readiness")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send_with(secured(), request).await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn blank_token_disables_only_the_token_check() {
+        let open = ServiceAuth::new(" ", "");
+        assert_eq!(
+            send_with(open.clone(), message(&[])).await.0,
+            StatusCode::BAD_REQUEST
+        );
+        let browser = message(&[("origin", "http://localhost:6274")]);
+        assert_eq!(send_with(open, browser).await.0, StatusCode::FORBIDDEN);
     }
 }

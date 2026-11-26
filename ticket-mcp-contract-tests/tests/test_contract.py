@@ -1,6 +1,7 @@
 """Black-box contract every ticket-mcp-server implementation (Java, Python, Rust) must satisfy.
 
 Run against a live server: TICKETS_MCP_URL=http://localhost:8081 uv run pytest
+Set MCP_SERVICE_TOKEN to the server's token if it has one (K5).
 Expected values were captured from the original Java (Spring AI) implementation.
 """
 
@@ -319,14 +320,16 @@ async def test_unknown_tool_is_a_json_rpc_error(mcp):
     assert raised.value.error.data == "Tool not found: deleteTicket"
 
 
-async def test_raw_sse_transport_without_redirects(base_url):
+async def test_raw_sse_transport_without_redirects(base_url, auth_headers):
     """Speaks the HTTP+SSE transport by hand with redirects disabled.
 
     The MCP Python client quietly follows redirects; Spring AI's Java client (used by the
     assistant) does not, so the message endpoint must accept the POST directly.
     """
     async with (
-        httpx.AsyncClient(base_url=base_url, follow_redirects=False, timeout=10) as client,
+        httpx.AsyncClient(
+            base_url=base_url, follow_redirects=False, timeout=10, headers=auth_headers
+        ) as client,
         client.stream("GET", "/sse", headers={"Accept": "text/event-stream"}) as events,
     ):
         assert events.status_code == 200
@@ -375,3 +378,36 @@ async def test_readiness_endpoint(base_url):
         response = await client.get(f"{base_url}/actuator/health/readiness")
     assert response.status_code == 200
     assert response.json()["status"] == "UP"
+
+
+# --- service auth (K5) -----------------------------------------------------------------------
+
+
+async def test_browser_origin_is_rejected(base_url, auth_headers):
+    """MCP_ALLOWED_ORIGINS is empty by default, so any Origin header gets 403, token or not."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
+        response = await client.post(
+            "/mcp/message",
+            json={},
+            headers={**auth_headers, "Origin": "https://evil.example"},
+        )
+    assert response.status_code == 403
+
+
+async def test_missing_or_wrong_token_is_rejected(base_url, service_token):
+    if not service_token:
+        pytest.skip("MCP_SERVICE_TOKEN is not set: the server under test runs without a token")
+    async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
+        missing = await client.get("/sse")
+        wrong = await client.post(
+            "/mcp/message", json={}, headers={"Authorization": f"Bearer {service_token}x"}
+        )
+    assert missing.status_code == 401
+    assert missing.headers["www-authenticate"] == "Bearer"
+    assert wrong.status_code == 401
+
+
+async def test_probes_need_no_token(base_url):
+    async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
+        response = await client.get("/actuator/health/liveness")
+    assert response.status_code == 200

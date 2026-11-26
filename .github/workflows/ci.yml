@@ -68,6 +68,8 @@ jobs:
   contract:
     needs: [java, python, rust]
     runs-on: ubuntu-latest
+    # Passed to the server container (docker run -e) and read by the contract tests.
+    env: {MCP_SERVICE_TOKEN: contract-only-token}
     strategy:
       fail-fast: false
       matrix:
@@ -108,9 +110,10 @@ jobs:
             sleep 1
           done
           docker logs tickets-db; exit 1
+      # Every server runs with a service token (K5); the suite sends it and checks the 401/403 paths.
       - name: Start server
         run: |
-          docker run -d --name server -p 8081:8081 ${{ matrix.run-args }} ticket-mcp-server-${{ matrix.impl }}
+          docker run -d --name server -p 8081:8081 -e MCP_SERVICE_TOKEN ${{ matrix.run-args }} ticket-mcp-server-${{ matrix.impl }}
           for i in $(seq 1 60); do
             curl -fs localhost:8081/actuator/health/readiness && exit 0
             sleep 1

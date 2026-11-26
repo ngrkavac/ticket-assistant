@@ -10,6 +10,11 @@ error messages and the readiness endpoint.
 TICKETS_MCP_URL=http://localhost:8081 uv run pytest
 ```
 
+If the server runs with a service token (`MCP_SERVICE_TOKEN`, contract K5), pass the same
+`MCP_SERVICE_TOKEN` to the tests: they send it as `Authorization: Bearer <token>` and also check
+that a missing or wrong token gets 401. Without it, that check is skipped. A request with an
+`Origin` header gets 403 either way (`MCP_ALLOWED_ORIGINS` is empty by default).
+
 The Java server stores tickets in a database and has the demo data the tests expect only in
 its `local` profile: run it with `SPRING_PROFILES_ACTIVE=local` (in-memory H2), and add
 `TICKETS_DB_URL`, `TICKETS_DB_USER` and `TICKETS_DB_PASSWORD` to test it on PostgreSQL as CI does.

@@ -41,6 +41,7 @@ class LeastPrivilegeTests {
     registry.add("REQUEST_LOG_DB_PASSWORD", () -> "app-secret");
     registry.add("REQUEST_LOG_DB_MIGRATION_USER", () -> "requestlog_migrator");
     registry.add("REQUEST_LOG_DB_MIGRATION_PASSWORD", () -> "migrator-secret");
+    registry.add("MCP_SERVICE_TOKEN", () -> "test-token");
     registry.add("REQUEST_LOG_DB_POOL_SIZE", () -> "3");
     registry.add("REQUEST_LOG_DB_STATEMENT_TIMEOUT", () -> "1s");
   }

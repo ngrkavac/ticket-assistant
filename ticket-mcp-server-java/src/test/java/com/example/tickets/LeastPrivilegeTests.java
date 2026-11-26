@@ -43,6 +43,7 @@ class LeastPrivilegeTests {
     registry.add("TICKETS_DB_MIGRATION_PASSWORD", () -> "migrator-secret");
     registry.add("TICKETS_DB_POOL_SIZE", () -> "3");
     registry.add("TICKETS_DB_STATEMENT_TIMEOUT", () -> "1s");
+    registry.add("MCP_SERVICE_TOKEN", () -> "test-token");
   }
 
   @Autowired DataSource dataSource;

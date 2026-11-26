@@ -44,7 +44,8 @@ class DatabaseProfileTests {
       "--TICKETS_DB_USER=tickets_app",
       "--TICKETS_DB_PASSWORD=app-secret",
       "--TICKETS_DB_MIGRATION_USER=tickets_migrator",
-      "--TICKETS_DB_MIGRATION_PASSWORD=migrator-secret"
+      "--TICKETS_DB_MIGRATION_PASSWORD=migrator-secret",
+      "--MCP_SERVICE_TOKEN=test-token"
     };
   }
 
