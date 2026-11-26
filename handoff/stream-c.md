@@ -1,45 +1,46 @@
-# Stream c handoff – 2026-11-25
+# Stream c handoff – 2026-11-26
 ## Done this session
-- C12 (T6.5) – `prod/c12-e2e-smoke` (from `main` at 5986b1e)
+- c-maven-cache (main-session request) – `prod/c-maven-cache` (from `main` at 03afa82)
 
 ## Ready to push
-### `prod/c12-e2e-smoke` (base: `main`)
-**PR title:** E2E smoke CI job: compose stack, tiny Ollama model, Keycloak sign-in through oauth2-proxy (C12 / T6.5)
+### `prod/c-maven-cache` (base: `main`)
+**PR title:** Image builds: resolve Maven dependencies once per pom change and fail fast on 429
 
 **PR body:**
-Implements C12 / T6.5 of PRODUCTION_READINESS_PLAN.md.
+Fixes the Maven Central `429 Too Many Requests` failures in the image builds (`image (assistant)` failed three times in two days, once after about 40 minutes of retries).
 
-**New `.github/e2e/smoke.sh`** (bash, curl, jq). It drives a running compose stack the way a browser does, through the real K2 path (oauth2-proxy → Keycloak login form → session cookie → nginx → assistant):
-1. Without a session, `GET /customers` gets 401 (oauth2-proxy API route).
-2. It signs in as `acme-agent` (realm `deploy/keycloak/realm-helpdesk.json`, client `helpdesk-ui`, authorization code + PKCE). It loads `/`, submits Keycloak's login form, and follows the redirects through `/oauth2/callback` back to the SPA. Then `/oauth2/userinfo` must name the user.
-3. `GET /customers` must be exactly `["acme"]`.
-4. `POST /ask` for `acme` must return 200 with a non-empty answer. It is sent with its own `X-Request-Id`.
-5. `GET /requests?customer=acme` must contain the row with that request id, with `customer`, `question` and `status == "SUCCESS"`. The script polls for up to 30 s, because the log is written in the background.
-6. The cross-customer checks: `acme-agent` gets 403 on `POST /ask` for `globex` and on `GET /requests?customer=globex`.
+**Cause.** Every Java image build started with an empty BuildKit cache mount, so the three parallel Java builds in `images.yml` each downloaded the full dependency set (about 1,400 POMs, 420 MB) from Central on every run where the GHA layer cache missed, which is whenever a pom changes. With `.mvn/maven.config` (5 retries, a 429's `Retry-After` honoured up to Maven's default 5 minutes), a rate-limited build kept retrying for a very long time.
 
-Failures print the step, the HTTP status and the start of the body. The user, customers, question and host ports can be overridden by env vars (`E2E_*`). With `E2E_UI_PORT`/`E2E_KEYCLOAK_PORT`, curl connects to other host ports (`--connect-to`) while the URLs stay `localhost:5173`/`localhost:8180`, the only redirect URI and issuer the realm accepts.
+**Chosen approach: a dependency "seed" resolved once on the runner and cached** (a variant of option (b) that keeps the jar build inside Docker):
+- New composite action `.github/actions/maven-seed`. Its cache key is `maven-seed-v1-<os>-<hash of all poms and the wrapper properties>`. On an exact hit it does nothing else (or, with `download-on-hit: "false"`, only checks that the cache exists). On a miss it restores the newest older seed (restore-keys), so a pom change downloads only what is new. It then runs the same goals as the Dockerfile on the runner (`dependency:go-offline`, then `package -DskipTests`, each capped with `timeout 15m`) into `$RUNNER_TEMP/maven-seed` (`repository/` plus the wrapper's `wrapper/`), prints how much it restored and downloaded, and saves the cache.
+- `Dockerfile`: a new `FROM scratch AS maven-seed` stage, empty by default. The wrapper step and the `go-offline` step bind-mount it. If it contains `wrapper/` or `repository/`, those are copied in before Maven runs, so only what the seed lacks is downloaded. Plain `docker build` and `docker compose build` behave as before (empty seed). The final image is unchanged: same layered jar extraction, same non-root user 10001, same entrypoint and env.
+- `images.yml`: a new `maven-seed` job (lookup only when the cache exists). `image` needs it; the three Java matrix entries (`maven: true`) restore the seed and pass `build-contexts: maven-seed=<dir>`. If the restore misses (e.g. evicted), a warning is printed and the build falls back to Central. Trivy, SBOM, push, cosign and the summary are untouched.
+- `e2e-smoke.yml`: the same action in its single job, and `docker compose build` with the new override `.github/e2e/compose.maven-seed.yml` (`additional_contexts: maven-seed` for the three Java services). `.mvn/**` and the action were added to the paths filter.
+- **Fail fast:** `.mvn/maven.config` now retries 3 times (5 s, 10 s, 15 s) and caps `Retry-After` at 30 s (`retryHandler.intervalMax=30000`; this property exists in the bundled resolver 1.9.27). The Docker build steps in both workflows have `timeout-minutes: 20`, the seed job 30.
 
-**New `.github/workflows/e2e-smoke.yml`**
-- Triggers: `pull_request` with a paths filter on the wiring (`docker-compose.yml`, the Dockerfiles, `.dockerignore`, `ui/nginx.conf.template`, `deploy/keycloak/**`, root and module POMs, `*/src/main/resources/application*.properties`, the assistant's `SecurityConfig`/`HelpdeskJwtConverter`, and the test itself), plus `workflow_dispatch` with inputs `profile` (`java` | `python`, default `java`) and `model` (default `qwen2.5:0.5b`).
-- Steps: `docker compose build`, then `docker compose up --detach --wait --wait-timeout 900`. That waits for every container to be healthy, and for the `ollama-pull` one-shot to complete. Then it runs the smoke script. On failure it prints `ps --all` and all logs. `down --volumes` always runs.
-- Compose project `e2e`, `contents: read` only, 40-minute timeout, concurrency per PR. The only action is `actions/checkout`, pinned by SHA like the other workflows. There are no secrets; only `REQUEST_LOG_DB_PASSWORD` is set (throwaway), and everything else uses compose's local-only defaults, including the K5 service tokens.
+**Why not the alternatives:**
+- (a) `buildkit-cache-dance` keyed on the poms: on a pom change, all three image jobs would still start cold together and download in parallel, which is exactly the 429 case. It would also add a third-party action that writes into BuildKit's state.
+- Pure (b), prebuilt jars copied into the image: the jar build would leave Docker. The `Dockerfile` would need a second path for local builds, and CI images would no longer come from the same build as local and compose images.
+- The seed keeps the Dockerfile as the single build path and changes only where the downloads come from. The GHA cache traffic stays inside GitHub (about 420 MB per restore, a few seconds).
 
-**Why a tiny real model rather than a stub Ollama server:** `qwen2.5:0.5b` is about 400 MB, supports tool calling, and answered every local `/ask` in 1 to 12 s on CPU. With it, the job also covers the real Ollama API, the model pull, and Spring AI's chat and tool-calling loop, which a stub would fake. The script asserts only wiring (status codes, a non-empty answer, the history row), never what the model says, so answer quality cannot make the job flaky. If it ever does get flaky, the `model` input or `OLLAMA_MODEL` is the single place to change. The ticket MCP server is exercised in every run by `/customers` and by the customer check in `/ask` (`listCustomers`). Whether the tiny model also calls the ticket tools is not asserted.
+**Verified locally:**
+- I built a seed in a Linux `eclipse-temurin` 21 JDK container the way the action does: 1,384 POMs, 421 MB.
+- `assistant` and `ticket-mcp-server-java` built on fresh `docker-container` builders with `--build-context maven-seed=<seed>` **and `--network none`**. Both builds succeeded, so the seed covers every download, including the Maven wrapper distribution. The log shows `maven-seed: 1384 POMs copied into the local repository`.
+- `ticket-mcp-server-java` built without a seed on another fresh builder (the plain local path). Its `/app` file list is identical to the seeded build's (110 files), with the same user (10001), entrypoint and env.
+- Both compose variants built on a separate compose project: plain `docker compose build` (java profile, all services), and the e2e variant with the override file and `MAVEN_SEED_DIR`.
+- actionlint 1.7.7: no findings for `images.yml` and `e2e-smoke.yml` (it also checks the local composite action's inputs).
+- Afterwards, the test builders, images and scratch copies were removed. The user's `helpdesk-assistant-*` stack was not touched.
 
-**Forward compatibility:** compose already sets the K5 tokens on both sides (C8), so the job keeps working after B9 + A14 merge (as long as A14 merges no later than B9, as C8 notes). After B10/A15 (Streamable HTTP), nothing here changes either. The `rust` profile is not offered, since it is legacy (D2).
+**The real proof is the first GitHub runs.** Expect a cold first run and a warm second one:
+1. First run on this PR: in the `maven-seed` job, the "Run ./mvnw ..." step runs and ends with `maven-seed: 0 POMs restored, ~1400 downloaded, ~420M in total`, then "Cache saved with key: maven-seed-v1-Linux-…". Only this one job talks to Central. In each Java `image` job, "Restore Maven seed" reports "Cache restored from key: maven-seed-v1-Linux-…", and the Build log's go-offline step prints `maven-seed: <n> POMs copied into the local repository`.
+2. Next run with unchanged poms: the `maven-seed` job finishes in seconds ("Cache found and can be restored from key …", every later step skipped).
+3. A pom change: the job restores the older seed ("Cache restored from key" naming an older hash) and the summary line shows only a handful of POMs downloaded.
+4. No "Check Maven seed" warning should appear. If one does, the seed was missing and that build used Central.
+5. A 429 should now fail a build within minutes (20-minute step cap) instead of after about 40 minutes.
 
-**README:** a short "E2E smoke test" paragraph under "Local sign-in (Keycloak)" on how to run it locally and in Actions.
+Note: this PR's own first `images` run on the PR ref saves a PR-scoped cache. `main` gets its own cold run after merge, and PRs then reuse `main`'s seed.
 
-**Verified locally** with a separate compose project `c12e2e` on host ports 15173/18080/18180 (port override file outside the repo; the user's `helpdesk-assistant-*` stack untouched), using the same steps as the job:
-- `java` profile: `up --wait` became healthy in about 5 minutes, including the image pulls and the model pull. The smoke test passed (about 10 s). It also passed 3 more times with a ticket question ("Which open tickets does acme have?"), and once as `globex-agent` with the customers swapped.
-- `python` profile: `up --build --wait` was healthy and the smoke test passed.
-- Negative check: a wrong password fails at sign-in with a clear message (exit 1).
-- actionlint 1.7.7: no findings for `e2e-smoke.yml`. shellcheck (stable): no findings for `smoke.sh`.
-- Afterwards, all containers, volumes, the network, the built images and the images pulled for the test were removed.
-
-**Not verified:** a run on GitHub's runners. Expect roughly 10 to 15 minutes there: there is no layer cache, so the three Java images and the UI image are built from scratch.
-
-**Needs from other streams:** none.
+**Needs from stream B:** CI's `contract` job builds `ticket-mcp-server-java` from the root `Dockerfile` too (one Java build per run, so less exposed, but it still downloads everything from Central on every pom change). Suggested change for the `java` matrix entry: before the build, `- if: matrix.impl == 'java'` / `id: seed` / `uses: ./.github/actions/maven-seed`, then on `docker/build-push-action` add `build-contexts: ${{ matrix.impl == 'java' && format('maven-seed={0}', steps.seed.outputs.dir) || '' }}` and `timeout-minutes: 20`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -47,17 +48,15 @@ Failures print the step, the HTTP status and the start of the body. The user, cu
 none
 
 ## Next task
-C10 – dependencies satisfied: no (⛓ A16). C11a [L] – no (waits for S1 / A8 per the plan; check whether the plan considers S1 reached).
+C10 – dependencies satisfied: no (⛓ A16 not merged). C11a–c are [L] and wait for S1. C13 needs the Helm chart (C11a) for "tags → images → chart" and A20 (not merged) for the nightly eval, so it is effectively blocked. C14 (RUNBOOK/SECURITY) documents deploy/rollback, alerts and DB restore that C11 and stream A have not built yet, so it was not started this session.
 
 ## Blocked on
-C10 waits for A16; C11a+ wait for S1.
+C10 on A16; C13 on C11a and A20; C11a+ on S1 (check whether the main session considers S1 reached).
 
 ## Notes for the next session
-- C9 is merged; the old `prod/c9-image-pipeline-restack` notes no longer apply.
-- Local isolated compose runs: put a port override (`ports: !override [...]`, compose v5 supports it) in the scratchpad and call `docker compose --project-directory <worktree> -f <worktree>/docker-compose.yml -f <override> ...` with `COMPOSE_PROJECT_NAME=c12e2e` (or similar). Then run `E2E_UI_PORT=15173 E2E_KEYCLOAK_PORT=18180 bash .github/e2e/smoke.sh`.
-- `docker compose up --wait` handles the `ollama-pull` one-shot fine (it reports "Exited" and the command still exits with 0).
-- The assistant does not log successful tool calls, so the logs cannot show whether the model used the ticket tools.
-- Possible follow-up: cache the image builds in the E2E job (e.g. the `images.yml` GHA cache scopes via `docker buildx bake` with compose), if the job is too slow.
-- The worktree-isolation guard rejects commands that combine `git` with more complex shell (pipes, `${PIPESTATUS}`, etc.). Keep git commands plain.
-- actionlint: `docker run --rm -v "<worktree>:/repo" -w /repo rhysd/actionlint:1.7.7`; shellcheck: `docker run --rm -v "<dir>:/mnt:ro" koalaman/shellcheck:stable /mnt/<file>`. Remove both images afterwards.
-- The user's stack (`helpdesk-assistant-*`) runs on 5173/8080/8081/8082.
+- The maven-seed cache grows a little with each pom change, because a miss starts from the previous seed. Bump `v1` in `.github/actions/maven-seed/action.yml` (both key and restore-keys) to start fresh.
+- `.mvn/maven.config` does not support comments (Maven 3.9). The retry rationale is documented in the Dockerfile comment.
+- The worktree-isolation guard rejects Bash commands that contain `.github`, `git.properties` or other "git" substrings in complex forms. Put such commands into a script in the scratchpad and run `bash <script>`.
+- Local proof that a seed is complete: `docker buildx build --network none --build-context maven-seed=<dir> ...` on a fresh `docker-container` builder.
+- `moby/buildkit:buildx-stable-1` was present after testing (tagged today). It may have been pulled by another session, so it was left in place.
+- actionlint: `docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 <files>` from the worktree. Remove the image afterwards.
