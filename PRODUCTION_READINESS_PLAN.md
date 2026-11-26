@@ -266,13 +266,13 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **A7** (T1.3) Endpoint authorization per K3.
 - [x] **A8** **[L]** (T1.4) `CustomerScopedToolCallback` using the ToolContext. Hide `listCustomers` from the model and stop sending the customer as user text.
 - [x] **A9** (T1.5) Filter tools per request, so `createTicket` is offered only to users with `tickets-write`. Collect tool-call audit records.
-- [ ] **A10** (T1.5, T1.6, client side) Send `userSubject` and `toolCalls` per K4. ⛓ B3.
+- [x] **A10** (T1.5, T1.6, client side) Send `userSubject` and `toolCalls` per K4. ⛓ B3.
 - [ ] **A11** (T1.8) Per-user rate limit with Bucket4j (`RATE_LIMIT_ASKS_PER_MINUTE`).
 - [ ] **A12** (T1.9) Auth/authz test matrix (endpoint × role × customer) and a cross-customer integration test with a fake model.
 - [ ] **A13** (T3.3) Health indicators `ticketsMcp`, `requestLogMcp` and `ollama`; readiness group.
 - [x] **A14** (T3.4, client side) Send the service tokens per K5. Harmless before B9 merges.
 - [ ] **A15** **[L]** (T3.1 client side + T3.2) Streamable HTTP connections, lazy MCP initialization and reconnect, with a test that restarts a server. ⛓ merges together with B10 (S2).
-- [ ] **A16** (T3.5, config side) Make the embedding model and tokenizer URIs configurable (`EMBEDDING_MODEL_URI`, `EMBEDDING_TOKENIZER_URI`).
+- [x] **A16** (T3.5, config side) Make the embedding model and tokenizer URIs configurable (`EMBEDDING_MODEL_URI`, `EMBEDDING_TOKENIZER_URI`).
 - [ ] **A17** (T4.1, T4.2, T4.4) For the assistant: JSON logs in `prod`, OTel tracing, and business metrics per K9.
 - [ ] **A18** (T5.8) `application-prod.properties` and fail-fast validation of the required properties.
 - [ ] **A19** (T4.5) PrometheusRules and a Grafana dashboard in `deploy/observability/`. ⛓ B11 for the MCP panels.
