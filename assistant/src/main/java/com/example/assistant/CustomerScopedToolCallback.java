@@ -36,6 +36,9 @@ import org.springframework.security.access.AccessDeniedException;
  * the {@code tickets-write} role. Every call, refused or not, is added to the request's {@link
  * ToolCallAudit} if the tool context has one. The tool context itself is not forwarded, so the
  * principal never ends up in the MCP request's {@code _meta}.
+ *
+ * <p>A read tool whose call ran into a lost MCP session (the ticket server restarted) is called
+ * once more ({@link McpClientSupervisor}); a write tool is not, so a ticket is never created twice.
  */
 final class CustomerScopedToolCallback implements ToolCallback {
 
@@ -128,7 +131,11 @@ final class CustomerScopedToolCallback implements ToolCallback {
     String result;
     try {
       // no tool context: it holds the principal, which must not reach the ticket server
-      result = delegate.call(args.toString());
+      String input = args.toString();
+      result =
+          isWriteTool()
+              ? delegate.call(input) // may have run before the session was lost: never repeated
+              : McpClientSupervisor.call(tool, () -> delegate.call(input));
     } catch (RuntimeException e) {
       record(audit, tool, scoped, ToolCallAudit.ERROR, null);
       throw e;

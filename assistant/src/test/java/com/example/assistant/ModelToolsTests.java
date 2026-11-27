@@ -1,10 +1,12 @@
 package com.example.assistant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
@@ -58,5 +60,33 @@ class ModelToolsTests {
         .containsExactly("getTicket", "createTicket");
     assertThat(names(tools.offeredTo(HelpdeskPrincipal.LOCAL)))
         .containsExactly("getTicket", "createTicket");
+  }
+
+  @Test
+  void aTicketServerThatCannotListItsToolsIsUnavailable() {
+    RuntimeException down = new IllegalStateException("Client failed to initialize listing tools");
+    ModelTools failing =
+        new ModelTools(
+            () -> {
+              throw down;
+            },
+            new SimpleMeterRegistry());
+    assertThatThrownBy(failing::all).isInstanceOf(TicketsUnavailableException.class).hasCause(down);
+  }
+
+  @Test
+  void listingAfterALostSessionIsRepeated() {
+    AtomicInteger listings = new AtomicInteger();
+    ModelTools afterRestart =
+        new ModelTools(
+            () -> {
+              if (listings.incrementAndGet() == 1) {
+                throw new RuntimeException(McpClientSupervisor.SESSION_TERMINATED);
+              }
+              return new ToolCallback[] {tool("getTicket", WITH_CUSTOMER)};
+            },
+            new SimpleMeterRegistry());
+    assertThat(names(afterRestart.all())).containsExactly("getTicket");
+    assertThat(listings).hasValue(2);
   }
 }

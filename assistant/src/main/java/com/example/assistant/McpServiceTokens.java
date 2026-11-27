@@ -17,9 +17,11 @@ import org.springframework.lang.Nullable;
  * carries {@code Authorization: Bearer <token>}. The tokens are set per connection name ({@code
  * helpdesk.mcp.tokens.<connection>}, from {@code TICKETS_MCP_TOKEN} and {@code
  * REQUEST_LOG_MCP_TOKEN}) and matched to the requests by the origin (scheme, host and port) of the
- * connection's URL, so a token is only ever sent to its own server. The MCP transports resolve the
- * SSE and message endpoints against that origin, so the URL's path is not compared. A blank token
- * sends no header, which is what a server without a token (local development) expects.
+ * connection's URL, so a token is only ever sent to its own server. The Streamable HTTP transport
+ * resolves its endpoint ({@code /mcp}, K6) against that origin, so the URL's path is not compared.
+ * The token goes on every request of the transport: the POSTs, the GET event stream and the DELETE
+ * that ends a session. A blank token sends no header, which is what a server without a token (local
+ * development) expects.
  */
 final class McpServiceTokens implements McpSyncHttpClientRequestCustomizer {
 

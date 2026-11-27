@@ -14,6 +14,8 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Service tokens for the MCP servers (T3.4, contract K5). The MCP client auto-configuration applies
  * the {@link McpSyncHttpClientRequestCustomizer} bean to every SSE and Streamable HTTP transport.
+ * The assistant uses Streamable HTTP (K6); SSE connections are still matched, for local setups that
+ * point a connection at a legacy SSE server.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(McpServiceTokenConfig.TokenProperties.class)

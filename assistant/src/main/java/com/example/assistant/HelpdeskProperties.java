@@ -72,10 +72,11 @@ public record HelpdeskProperties(
 
   /**
    * Every /ask request is stored through the MCP server on the named client connection
-   * (spring.ai.mcp.client.sse.connections.&lt;connection&gt;). Its tools are never offered to the
-   * model. Writes run in the background on at most {@code writeThreads} threads; at most {@code
-   * queueCapacity} writes wait for a thread, and further writes are dropped (counted in {@code
-   * helpdesk_requestlog_writes_total{outcome="dropped"}}) so a slow log server never holds up /ask.
+   * (spring.ai.mcp.client.streamable-http.connections.&lt;connection&gt;). Its tools are never
+   * offered to the model. Writes run in the background on at most {@code writeThreads} threads; at
+   * most {@code queueCapacity} writes wait for a thread, and further writes are dropped (counted in
+   * {@code helpdesk_requestlog_writes_total{outcome="dropped"}}) so a slow log server never holds
+   * up /ask.
    */
   public record RequestLog(
       boolean enabled,

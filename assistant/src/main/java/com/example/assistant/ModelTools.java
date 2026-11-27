@@ -26,9 +26,19 @@ class ModelTools {
     this.meters = meters;
   }
 
-  /** Every tool the model may be offered, customer-scoped. */
+  /**
+   * Every tool the model may be offered, customer-scoped.
+   *
+   * @throws TicketsUnavailableException if the ticket server cannot list its tools
+   */
   List<CustomerScopedToolCallback> all() {
-    return Arrays.stream(mcpTools.getToolCallbacks())
+    ToolCallback[] callbacks;
+    try {
+      callbacks = McpClientSupervisor.call("tools/list", mcpTools::getToolCallbacks);
+    } catch (RuntimeException e) {
+      throw new TicketsUnavailableException("Listing the ticket tools failed", e);
+    }
+    return Arrays.stream(callbacks)
         .filter(CustomerScopedToolCallback::takesCustomer)
         .map(tool -> new CustomerScopedToolCallback(tool, meters))
         .toList();
