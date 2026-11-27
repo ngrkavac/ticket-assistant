@@ -62,9 +62,7 @@ class ObservabilityTests {
   @Test
   void prometheusIsServedOnTheAppPortWithoutAToken() throws Exception {
     // A rejected MCP request: the auth filter runs inside the observation filter, so it is counted.
-    assertThat(
-            send(request("/mcp/message").POST(HttpRequest.BodyPublishers.ofString("{}")))
-                .statusCode())
+    assertThat(send(request("/mcp").POST(HttpRequest.BodyPublishers.ofString("{}"))).statusCode())
         .isEqualTo(401);
 
     HttpResponse<String> response = send(request("/actuator/prometheus"));
