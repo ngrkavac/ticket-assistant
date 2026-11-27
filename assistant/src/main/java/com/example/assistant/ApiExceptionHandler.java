@@ -71,6 +71,19 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 HttpStatus.TOO_MANY_REQUESTS, "The assistant is busy. Please retry shortly."));
   }
 
+  /** The caller's own per-minute allowance is used up (not the assistant as a whole). */
+  @ExceptionHandler(AskRateLimitedException.class)
+  ResponseEntity<ProblemDetail> rateLimited(AskRateLimitedException e) {
+    return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+        .header(
+            HttpHeaders.RETRY_AFTER,
+            String.valueOf(HelpdeskProperties.retryAfterSeconds(e.retryAfter())))
+        .body(
+            ProblemDetail.forStatusAndDetail(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "You have asked too many questions in a short time. Please wait a moment."));
+  }
+
   /** The request-log server's message is not passed on; it may describe internal limits. */
   @ExceptionHandler(RequestLogRejectedException.class)
   ProblemDetail requestLogRejected(RequestLogRejectedException e) {

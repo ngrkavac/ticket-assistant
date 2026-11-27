@@ -40,6 +40,8 @@ class AssistantControllerTests {
 
   @MockitoBean TicketDirectoryClient tickets;
 
+  @MockitoBean AskRateLimiter rateLimiter;
+
   private org.springframework.test.web.servlet.ResultActions ask(String body, String key)
       throws Exception {
     var req = post("/ask").contentType(MediaType.APPLICATION_JSON).content(body);
@@ -184,6 +186,39 @@ class AssistantControllerTests {
     ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret")
         .andExpect(status().isTooManyRequests())
         .andExpect(header().string("Retry-After", "5"));
+  }
+
+  @Test
+  void rateLimitedUserGets429WithTheWaitAsRetryAfter() throws Exception {
+    org.mockito.BDDMockito.willThrow(new AskRateLimitedException(java.time.Duration.ofMillis(2100)))
+        .given(rateLimiter)
+        .acquire(any());
+    ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret")
+        .andExpect(status().isTooManyRequests())
+        .andExpect(header().string("Retry-After", "3"))
+        .andExpect(
+            jsonPath("$.detail")
+                .value("You have asked too many questions in a short time. Please wait a moment."));
+    verify(tickets, never()).requireKnown(anyString());
+    verify(service, never()).ask(anyString(), any(), any());
+  }
+
+  @Test
+  void everyAskOfTheUserCountsTowardsTheLimitAlsoADeniedOne() throws Exception {
+    given(service.ask(eq("hi"), eq("acme"), any())).willReturn("hello");
+    ask("{\"question\":\"hi\",\"customer\":\"acme\"}", "secret").andExpect(status().isOk());
+    ask("{\"question\":\"hi\",\"customer\":\"globex\"}", "secret")
+        .andExpect(status().isForbidden());
+    verify(rateLimiter, org.mockito.Mockito.times(2))
+        .acquire(org.mockito.ArgumentMatchers.argThat(p -> "user-1".equals(p.subject())));
+  }
+
+  @Test
+  void invalidBodiesDoNotCountTowardsTheLimit() throws Exception {
+    ask("{\"question\":\" \",\"customer\":\"acme\"}", "secret").andExpect(status().isBadRequest());
+    ask("{\"question\":\"" + "x".repeat(51) + "\",\"customer\":\"acme\"}", "secret")
+        .andExpect(status().isBadRequest());
+    verify(rateLimiter, never()).acquire(any());
   }
 
   @Test
