@@ -61,6 +61,7 @@ class ChatConfigTests {
             0,
             null,
             null,
+            null,
             null);
     var filter = new ChatConfig().hideInternalTools(props);
     var tickets =
@@ -114,6 +115,7 @@ class ChatConfigTests {
             0,
             null,
             null,
+            null,
             null);
     McpSyncClient tickets = client("tickets", "getTicket", "listCustomers");
     McpSyncClient requestLog = client("requestlog", "logRequest");
@@ -143,6 +145,7 @@ class ChatConfigTests {
             0,
             1,
             0,
+            null,
             null,
             null,
             null);

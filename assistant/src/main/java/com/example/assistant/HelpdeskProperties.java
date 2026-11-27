@@ -19,7 +19,8 @@ public record HelpdeskProperties(
     @Min(0) @Max(MAX_CATALOG_QUESTION_LENGTH) int maxCatalogQuestionLength,
     Duration queueWait,
     Duration retryAfter,
-    Duration customersCacheTtl) {
+    Duration customersCacheTtl,
+    @Valid RateLimit rateLimit) {
 
   /** The longest catalog question the request-log server stores. */
   static final int MAX_CATALOG_QUESTION_LENGTH = 1000;
@@ -48,6 +49,7 @@ public record HelpdeskProperties(
     if (customersCacheTtl.isNegative()) {
       throw new IllegalArgumentException("helpdesk.customers-cache-ttl must not be negative");
     }
+    rateLimit = rateLimit == null ? new RateLimit(null) : rateLimit;
   }
 
   /** The Retry-After header value: whole seconds, rounded up. */
@@ -57,6 +59,19 @@ public record HelpdeskProperties(
 
   static long retryAfterSeconds(Duration d) {
     return d.plusNanos(999_999_999).getSeconds();
+  }
+
+  /**
+   * Per-user limit on {@code POST /ask} ({@link AskRateLimiter}): questions per minute per JWT
+   * {@code sub}, per pod. Unset means {@link #DEFAULT_ASKS_PER_MINUTE}; 0 turns the limit off.
+   */
+  public record RateLimit(@Min(0) @Max(100_000) Integer asksPerMinute) {
+
+    static final int DEFAULT_ASKS_PER_MINUTE = 20;
+
+    public RateLimit {
+      asksPerMinute = asksPerMinute == null ? DEFAULT_ASKS_PER_MINUTE : asksPerMinute;
+    }
   }
 
   public record Rag(@Min(1) @Max(20) int topK, @Min(0) @Max(1) double similarityThreshold) {}
