@@ -179,7 +179,8 @@ services:
       OIDC_ISSUER_URI: http://localhost:8180/realms/helpdesk
       OIDC_JWK_SET_URI: http://keycloak:8080/realms/helpdesk/protocol/openid-connect/certs
       OIDC_AUDIENCE: helpdesk-assistant
-    volumes: [models:/models]   # caches the embedding model between restarts
+    # The embedding model and tokenizer are baked into the image (EMBEDDING_MODEL_URI and
+    # EMBEDDING_TOKENIZER_URI point at /opt/models), so no download and no cache volume.
     # Loopback only, for curl with a token (README). The UI reaches it inside the network.
     ports: ["127.0.0.1:8080:8080"]   # management port 9090 is intentionally not published
     healthcheck:
@@ -253,6 +254,5 @@ services:
 
 volumes:
   ollama:
-  models:
   pgdata:
   ticketsdata:
