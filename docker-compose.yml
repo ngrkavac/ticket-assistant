@@ -250,6 +250,10 @@ services:
       # Keycloak access tokens live 5 minutes: refresh them before they expire.
       OAUTH2_PROXY_COOKIE_REFRESH: 4m
       OAUTH2_PROXY_COOKIE_EXPIRE: 10h
+      # oauth2-proxy answers 502 when the upstream takes longer than 30s (its default). An /ask
+      # answer from the local model can take minutes, so wait as long as nginx does
+      # (proxy_read_timeout in ui/nginx.conf.template) plus a little.
+      OAUTH2_PROXY_UPSTREAM_TIMEOUT: 190s
     ports: ["127.0.0.1:5173:4180"]   # http://localhost:5173, the redirect URI registered in the realm
 
 volumes:
