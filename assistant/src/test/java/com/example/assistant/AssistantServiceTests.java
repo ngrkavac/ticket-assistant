@@ -82,7 +82,8 @@ class AssistantServiceTests {
   private final List<Prompt> prompts = new CopyOnWriteArrayList<>();
 
   private static HelpdeskProperties props(int maxConcurrent) {
-    return new HelpdeskProperties(null, null, null, null, 0, maxConcurrent, 0, null, null, null);
+    return new HelpdeskProperties(
+        null, null, null, null, 0, maxConcurrent, 0, null, null, null, null);
   }
 
   /** A real ChatClient with the app's system prompt over a fake model answering from user text. */
@@ -323,7 +324,7 @@ class AssistantServiceTests {
     CountDownLatch finish = new CountDownLatch(1);
     var props =
         new HelpdeskProperties(
-            null, null, null, null, 0, 1, 0, Duration.ZERO, Duration.ofSeconds(30), null);
+            null, null, null, null, 0, 1, 0, Duration.ZERO, Duration.ofSeconds(30), null, null);
     AssistantService service = new AssistantService(chat(slow(started, finish)), tools, props, log);
     Thread t = new Thread(() -> service.ask("slow", "acme", AGENT)); // takes the only slot
     t.start();

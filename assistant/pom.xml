@@ -36,6 +36,12 @@
 			<groupId>com.github.ben-manes.caffeine</groupId>
 			<artifactId>caffeine</artifactId>
 		</dependency>
+		<!-- Per-user rate limit on /ask (not in the Spring Boot BOM) -->
+		<dependency>
+			<groupId>com.bucket4j</groupId>
+			<artifactId>bucket4j_jdk17-core</artifactId>
+			<version>8.22.0</version>
+		</dependency>
 		<!-- Chat model (local Ollama, free) -->
 		<dependency>
 			<groupId>org.springframework.ai</groupId>

@@ -10,7 +10,7 @@ class HelpdeskPropertiesTests {
 
   @Test
   void appliesDefaultsWhenNothingIsConfigured() {
-    var p = new HelpdeskProperties(null, null, null, null, 0, 0, 0, null, null, null);
+    var p = new HelpdeskProperties(null, null, null, null, 0, 0, 0, null, null, null, null);
     assertThat(p.rag().topK()).isEqualTo(3);
     assertThat(p.rag().similarityThreshold()).isEqualTo(0.3);
     assertThat(p.security().apiKey()).isNull();
@@ -28,6 +28,13 @@ class HelpdeskPropertiesTests {
     assertThat(p.requestLog().connection()).isEqualTo("requestlog");
     assertThat(p.requestLog().queueCapacity()).isEqualTo(1000);
     assertThat(p.requestLog().writeThreads()).isEqualTo(4);
+    assertThat(p.rateLimit().asksPerMinute()).isEqualTo(20);
+  }
+
+  @Test
+  void rateLimitKeepsAConfiguredValueAndZeroForOff() {
+    assertThat(new HelpdeskProperties.RateLimit(5).asksPerMinute()).isEqualTo(5);
+    assertThat(new HelpdeskProperties.RateLimit(0).asksPerMinute()).isZero();
   }
 
   @Test
@@ -51,7 +58,8 @@ class HelpdeskPropertiesTests {
             300,
             Duration.ofMillis(250),
             Duration.ofMillis(1500),
-            Duration.ZERO);
+            Duration.ZERO,
+            null);
     assertThat(p.rag().topK()).isEqualTo(5);
     assertThat(p.security().apiKey()).isEqualTo("k");
     assertThat(p.security().rolesClaim()).isEqualTo("realm_access.roles");
@@ -79,12 +87,13 @@ class HelpdeskPropertiesTests {
     assertThatThrownBy(
             () ->
                 new HelpdeskProperties(
-                    null, null, null, null, 0, 0, 0, null, null, Duration.ofSeconds(-1)))
+                    null, null, null, null, 0, 0, 0, null, null, Duration.ofSeconds(-1), null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("customers-cache-ttl");
   }
 
   private static HelpdeskProperties props(Duration queueWait, Duration retryAfter) {
-    return new HelpdeskProperties(null, null, null, null, 0, 0, 0, queueWait, retryAfter, null);
+    return new HelpdeskProperties(
+        null, null, null, null, 0, 0, 0, queueWait, retryAfter, null, null);
   }
 }

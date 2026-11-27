@@ -45,6 +45,7 @@ class RequestLogClientTests {
         0,
         null,
         null,
+        null,
         null);
   }
 
