@@ -1,0 +1,80 @@
+{{- $v := .Values.ui -}}
+{{- $ctx := dict "root" $ "component" "ui" "values" $v -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ $v.replicas }}
+  selector:
+    matchLabels:
+      {{- include "helpdesk.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helpdesk.labels" $ctx | nindent 8 }}
+      {{- with $v.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "helpdesk.podSpecCommon" $ctx | trim | nindent 6 }}
+      containers:
+        - name: ui
+          image: {{ include "helpdesk.image" (dict "root" $ "image" $v.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- with $v.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            # nginx proxies /ask, /requests, /customers and /questions here with the user's
+            # access token as "Authorization: Bearer" (K2).
+            - name: ASSISTANT_URL
+              value: {{ include "helpdesk.assistantUrl" $ | quote }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # nginx serves static files: ready as soon as it listens, no startup probe needed.
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: {{ $v.readinessProbe.periodSeconds }}
+            failureThreshold: {{ $v.readinessProbe.failureThreshold }}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: {{ $v.livenessProbe.periodSeconds }}
+            failureThreshold: {{ $v.livenessProbe.failureThreshold }}
+          {{- include "helpdesk.lifecycle" $v | trim | nindent 10 }}
+          {{- with $v.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # C11b (readOnlyRootFilesystem) also needs writable mounts for nginx's cache and
+          # rendered config (/var/cache/nginx, /etc/nginx/conf.d); add them with the security context.
+          volumeMounts:
+            {{- include "helpdesk.tmpVolumeMount" $ | nindent 12 }}
+            {{- with $v.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "helpdesk.tmpVolume" $ | nindent 8 }}
+        {{- with $v.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "helpdesk.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+{{- include "helpdesk.pdb" $ctx }}

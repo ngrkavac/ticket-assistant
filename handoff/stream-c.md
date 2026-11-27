@@ -1,36 +1,50 @@
 # Stream c handoff – 2026-11-27
 ## Done this session
-- C10 – `prod/c10-bake-onnx-model` (from `main` at d2f5609)
+- C11a [L] – `prod/c11a-helm-chart` (from `main` at e2a22b6)
 
 ## Ready to push
-### `prod/c10-bake-onnx-model` (base: `main`)
-**PR title:** Bake the embedding model, tokenizer and DJL natives into the assistant image (C10)
+### `prod/c11a-helm-chart` (base: `main`)
+**PR title:** Helm chart skeleton for all deployable services, with lint and kubeconform in CI (C11a)
 
 **PR body:**
-Stream C, task C10 (T3.5, image side). Builds on A16 (merged): the assistant reads `EMBEDDING_MODEL_URI` and `EMBEDDING_TOKENIZER_URI` (K8). No contract change.
+Stream C, task C11a (T5.1, T5.2, T5.3). No contract change: the chart uses K5–K8 as written.
 
 **What changes**
-- `Dockerfile`, new `onnx-model` stage: downloads `model.onnx` and `tokenizer.json` of all-MiniLM-L6-v2. Both are pinned to Spring AI commit `82fe510b` (the last commit that touched them; the files are byte-identical to the ones behind Spring AI's default `main` URIs) and to their sha256 checksums (`ARG`s). curl retries 5 times.
-- **Finding: the model alone is not enough.** Running the image with `--network none` showed that Spring AI's `TransformersEmbeddingModel` uses DJL's PyTorch engine for mean pooling. DJL downloads libtorch from `publish.djl.ai` into `/tmp` **on every container start** (about 450 MB on amd64, 275 MB on arm64). That is why the current compose assistant works only with internet access. So there is a new `djl-natives` stage as well: it runs one real embedding with the baked model (`deploy/docker/djl/WarmUpEmbedding.java`, run as a single-file Java program on the assistant's own dependency jars). DJL therefore fetches exactly the natives the runtime needs for the target architecture. The stage retries 3 times, then checks the files against `deploy/docker/djl/natives-<amd64|arm64>.sha256`. After a DJL or Spring AI upgrade the check fails and prints the new manifest to commit. As a side effect, every image build proves that the baked model produces 384-dimension embeddings.
-- The runtime is split into `runtime-base` plus one stage per module (`FROM runtime-${MODULE}`; `MODULE` is now a global `ARG`). Only `runtime-assistant` gets `/opt/models/all-MiniLM-L6-v2/` and `/opt/djl/` (root-owned, read-only, world-readable, so uid 10001 reads but cannot change them). It sets `EMBEDDING_MODEL_URI=file:/opt/models/all-MiniLM-L6-v2/model.onnx`, `EMBEDDING_TOKENIZER_URI=file:/opt/models/all-MiniLM-L6-v2/tokenizer.json`, `DJL_CACHE_DIR=/opt/djl` and `DJL_OFFLINE=true`, and keeps `/models` as `EMBEDDING_CACHE_DIR` for the case where someone overrides the URIs with http(s). The MCP server images never run either stage and have no `/opt/models`, `/opt/djl`, `/models` or embedding env. A new Java module needs its own (empty) `runtime-<module>` stage.
-- Caching: `onnx-model` depends only on its ARGs. `djl-natives` depends only on the dependency jars layer, the program and the manifests. Both stay in the GHA layer cache (`images.yml`, `mode=max`) until one of those changes.
-- `docker-compose.yml`: the `models` cache volume is removed from the assistant and from `volumes:`, because nothing is downloaded any more. An existing local `helpdesk-assistant_models` volume is simply unused (`docker volume rm helpdesk-assistant_models` to clean up).
-- `e2e-smoke.yml`: `deploy/docker/**` is added to the paths filter. A new step after the smoke test fails if the assistant's log shows `Downloading`, `publish.djl.ai` or `githubusercontent.com`, and checks that it loaded `file:/opt/models/.../model.onnx`.
-- `README.md`: the Embeddings row describes the baked files, the manifests, the `/tmp` requirement and the upgrade path. The config list names `EMBEDDING_MODEL_URI` and `EMBEDDING_TOKENIZER_URI`.
+- New chart `deploy/helm/helpdesk/` with one template per service:
+  - `assistant`: Deployment, Service (8080 only), PDB and HPA.
+  - `ticket-mcp-server`: Java or Python, chosen by `ticketServer.implementation`, behind one Service name. There is no Rust template (D2), and the chart refuses `rust`.
+  - `request-log-mcp-server` and `ui`.
+  - `oauth2-proxy`: its own template rather than the upstream dependency chart. It uses the same pinned image as compose, needs no remote chart fetch in CI, and keeps the timeout chain and API routes next to the UI settings they must match. It uses OIDC discovery, a secure cookie and reverse-proxy mode.
+- **MCP (K6):** `TICKETS_MCP_URL` and `REQUEST_LOG_MCP_URL` are the Services' base URLs (`http://<release>-ticket-mcp-server:8081`, `...-request-log-mcp-server:8082`). The assistant appends `/mcp` itself (`spring.ai.mcp.client.streamable-http.connections.*.endpoint=/mcp`). A URL ending in `/mcp` would become `/mcp/mcp`. The servers are stateless, so replicas need no session affinity.
+- **Probes (K7, T5.2):** `startupProbe`, `readinessProbe` (`/actuator/health/readiness`) and `livenessProbe` (`/actuator/health/liveness`). They run on the assistant's management port 9090 and on 8081/8082 for the MCP servers; the Python server serves the same paths. The assistant's startup allows 36 × 5 s = 3 min (KB indexing and model load). The UI uses `/healthz`. oauth2-proxy uses `/ready` and `/ping`.
+- **Resources (T5.3):** the assistant requests 1 CPU / 1.5 Gi with a 2 Gi memory limit. That leaves room above the 75 % heap (`MaxRAMPercentage`, set in the image) for the ONNX and PyTorch natives. The MCP servers get 250m / 512Mi and the UI 50m / 64Mi. There are no CPU limits (they cause throttling). These are starting points to tune after B13.
+- **PDB/HPA:** every component has a PDB with `maxUnavailable: 1`. The assistant HPA scales on CPU, with an optional per-pod in-flight metric that needs a custom metrics adapter (off by default). Scale-down is stabilised for 5 min. `templates/validate.yaml` refuses to render when the assistant's maximum pods × `maxConcurrentRequests` exceeds `ollama.capacity.replicas × numParallel` (T3.6). Prod: 4 × 2 = 8 ≤ 2 × 4.
+- **`/tmp`:** every app pod gets an `emptyDir` at `/tmp`. Kubernetes does not mount it `noexec`, and onnxruntime maps a native library from there. It also keeps `/tmp` writable once C11b sets `readOnlyRootFilesystem`.
+- **Graceful shutdown:** a native `preStop` sleep of 5 s (Kubernetes ≥ 1.30, `kubeVersion` in Chart.yaml), then Spring's 30 s graceful shutdown. The UI (190 s) and oauth2-proxy (200 s) get longer grace periods so a running `/ask` can finish. Pods spread softly across nodes.
+- **Env:** `OLLAMA_URL`, `OLLAMA_MODEL` (pinned `llama3.1:8b-instruct-q4_K_M`), `OLLAMA_NUM_PREDICT` (1024), `HELPDESK_MAXCONCURRENTREQUESTS`, the OIDC settings (K1/K2), tracing (K8), and the DB pool and statement timeout. The image already sets `EMBEDDING_MODEL_URI`, `EMBEDDING_TOKENIZER_URI`, `DJL_CACHE_DIR` and `DJL_OFFLINE`, so the chart does not. `SPRING_PROFILES_ACTIVE=prod` (`global.springProfile`).
+- **No secrets in values:** the chart creates no Secret. It references existing ones through `secrets.*` (names and keys): the MCP tokens (K5), the tickets and request-log DB credentials, with the migration users optional (`optional: true`), and the oauth2-proxy client id, client secret and cookie secret.
+- **Values:** `values.yaml` holds the documented defaults. `values-staging.yaml` runs 1 replica per service, with the assistant HPA at 1–2, P14D retention and 100 % trace sampling. `values-prod.yaml` runs 2 replicas everywhere, with the assistant HPA at 2–4. Host names and DB URLs are `example.com`/in-cluster placeholders. Without an environment file the chart refuses to render (`publicHost`, `oidc.issuerUri` and the DB URLs are `required`).
+- **Hooks for later tasks:**
+  - C11b: empty `podSecurityContext`/`securityContext` per component, the Secret names, `publicHost`, and the "C11b" comments for the Ingress and NetworkPolicies.
+  - C11c: `ollama.url`/`ollama.capacity`, `assistant.kb`, and the `*.db.url` values.
+  - Every component also has `extraEnv`, `extraVolumes` and `extraVolumeMounts`.
+- **CI:** the new `.github/workflows/helm.yml` runs on changes to `deploy/helm/**` and calls `deploy/helm/check.sh`. That script runs:
+  - `helm lint --strict` and `helm template | kubeconform -strict` (Kubernetes 1.30.0 schemas) for staging and prod;
+  - four guard cases that must be refused: no env file, Ollama capacity exceeded, `rust`, and Python with 2 replicas;
+  - a kubeconform run of the Python variant.
+  helm (`alpine/helm:3.17.3`) and kubeconform (`ghcr.io/yannh/kubeconform:v0.7.0`) run from images pinned by tag and digest.
+- `renovate.json`: a regex custom manager keeps those two workflow images current (`# renovate: docker` comment). `helm-values` and `custom.regex` join the "Docker images non-major" group; `helm-values` covers the oauth2-proxy image in `values.yaml`.
 
-**Image size:** the assistant image grows by about 90 MB (model) plus the natives (about 450 MB uncompressed on amd64, 275 MB on arm64). Before, every pod start downloaded the same natives. The MCP server images are unchanged.
+**Verified locally**
+- `deploy/helm/check.sh` with helm 3.17.3 and kubeconform v0.7.0 (both run through Docker, as in CI): lint is clean for both environments; kubeconform finds 16/16 resources valid for staging, prod and the Python variant; all four guard cases are refused with the expected message.
+- I read through the rendered manifests: image references (`repo:tag@digest` when a digest is set), Secret refs, probes, the HPA, and the `/tmp` mounts.
+- actionlint 1.7.7 reports no findings for `helm.yml`. The Renovate regex matches both images (checked with Python).
+- No Java, UI or compose files changed, so `./mvnw verify` and the other CI jobs are unaffected.
+- Nothing was deployed to a cluster. The first real install comes with C11b/C11c (secrets, Ingress, Ollama, Postgres).
 
-**Verified locally (arm64, Docker 29.8.2)**
-- `docker build --build-arg MODULE=assistant .` succeeds. `docker run --rm --entrypoint ls ...` shows `/opt/models/all-MiniLM-L6-v2/{model.onnx,tokenizer.json}` (0444, root) and `/opt/djl/{pytorch,tokenizers}`. The sha256 values inside the image match the pins. The env vars are set and the user is uid 10001.
-- The assistant starts **offline and read-only**: `docker run --network none --read-only --tmpfs /tmp:exec -e SPRING_PROFILES_ACTIVE=local -e SPRING_AI_MCP_CLIENT_INITIALIZED=false`. The log shows "Indexed 3 KB files ... as 3 chunks", readiness is `{"status":"UP"}`, and nothing is downloaded or extracted into the DJL cache. Without the DJL stage, the same run failed with `UnknownHostException: publish.djl.ai`.
-- A wrong `TOKENIZER_SHA256` fails the build (`tokenizer.json: FAILED`). An empty natives manifest fails the build and prints the computed manifest.
-- `docker build --build-arg MODULE=ticket-mcp-server-java .` and `--build-arg MODULE=request-log-mcp-server` succeed without running `onnx-model` or `djl-natives`. Both images are the same size as before, with no model, natives or embedding env.
-- The amd64 manifest was produced by running `WarmUpEmbedding.java` in the pinned amd64 JDK image under emulation (a full amd64 image build does not work under local emulation: the Maven wrapper's `tar` fails with "Function not implemented", which is unrelated to this change). **The first CI `images` run on this PR (amd64) is the real check of `natives-amd64.sha256`.** If it fails there, the log prints the manifest to commit.
-- `docker compose config` is valid. actionlint 1.7.7 reports no findings for `e2e-smoke.yml`. No Java module changed, so `./mvnw verify` was not rerun.
-
-**Needs from stream A (optional, follow-up):** most of the image growth comes from libtorch, which Spring AI uses only for mean pooling over the ONNX output. A small custom `EmbeddingModel` that runs the ONNX session with onnxruntime and pools in plain Java would drop PyTorch (about 450 MB on amd64) from the image and the dependency tree. If that happens, delete the `djl-natives` stage and the `DJL_*` env.
-
-**Notes for C11b (stream C):** the pod needs a writable and **exec-able** `/tmp` (an emptyDir), because onnxruntime unpacks `libonnxruntime.so` there. Docker's `--tmpfs /tmp` is `noexec` by default and fails with "failed to map segment from shared object". `/opt/models` and `/opt/djl` are fine on a read-only root filesystem.
+**Notes**
+- `HELPDESK_MAXCONCURRENTREQUESTS` is Spring's canonical env form of `helpdesk.max-concurrent-requests` (a `@ConfigurationProperties` record).
+- The assistant has no `application-prod.properties` yet (A18). `SPRING_PROFILES_ACTIVE=prod` is harmless until then.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -38,15 +52,33 @@ Stream C, task C10 (T3.5, image side). Builds on A16 (merged): the assistant rea
 none
 
 ## Next task
-C11a [L] – dependencies satisfied: yes. S1 is reached: A5–A8, C6 and C7 are merged.
+C11b [L] – dependencies satisfied: yes, once C11a is merged (branch from `prod/c11a-helm-chart` if it is not merged yet, and say so in the PR text).
 
 ## Blocked on
-nothing for C11a. C13 still needs C11a (chart) and A20 (nightly eval). C14 is better after C11 and stream A's alerting work.
+nothing for C11b. C11c can follow C11b. C13 needs C11a (chart) and A20 (nightly eval). C14 is better after C11 and stream A's alerting work (A19).
 
 ## Notes for the next session
-- S1 is reached (A5–A8, C6, C7 merged), so start **C11a [L]** (it takes the whole session).
-- Streams A (A15) and B (B10) are switching MCP to Streamable HTTP at `/mcp` right now (S2, K6). Expect "Needs from stream A/B" notes for `docker-compose.yml` (healthchecks, URLs) and README. Check their PR texts/handoffs before touching compose or the chart's MCP URLs and probes. The chart should use `/mcp` per K6.
-- C10 facts for the chart (C11a/C11b): the assistant image already has `EMBEDDING_MODEL_URI`, `EMBEDDING_TOKENIZER_URI`, `DJL_CACHE_DIR=/opt/djl` and `DJL_OFFLINE=true` set, so the chart does not need to set them. Mount an emptyDir at `/tmp` (it must not be `noexec`). The startupProbe can be shorter now: in the offline run, startup to readiness UP took about 4 s locally, plus KB indexing.
-- DJL natives manifests: `deploy/docker/djl/natives-{amd64,arm64}.sha256`. On a mismatch the build prints the new manifest. For amd64 on an arm64 Mac, run `WarmUpEmbedding.java` in `--platform linux/amd64` with the JDK image (see the PR body), because a full amd64 build fails under emulation (tar "Function not implemented" in the Maven wrapper step).
-- The worktree guard rejects Bash commands containing "github" strings (e.g. URLs with `githubusercontent`) or `.github` paths in complex forms. Put them in a scratchpad script and run `bash <script>`, or use the Edit tool.
-- Local test images (`c10-*:test`) and the `rhysd/actionlint:1.7.7` image were removed after testing.
+- **Chart layout (C11a):** `deploy/helm/helpdesk/` (templates per component, `_helpers.tpl`, `validate.yaml`), `deploy/helm/check.sh` (lint, kubeconform and guards), `.github/workflows/helm.yml`. Run the check locally without installing tools:
+  `cd deploy/helm && HELM="docker run --rm -i -v $PWD:/w -w /w alpine/helm:3.17.3" KUBECONFORM="docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0" ./check.sh`
+  When you add a template, add a guard case to `check.sh` if it has a `fail`/`required`.
+- **C11b:**
+  - Line up the timeouts: Ingress ≥ oauth2-proxy `upstreamTimeout` (190s, as in compose) ≥ nginx `proxy_read_timeout` (180s in `ui/nginx.conf.template`). For ingress-nginx that means `proxy-read-timeout`/`proxy-send-timeout` ≥ 190 (use e.g. 200).
+  - `/tmp` must stay writable and exec-able. C11a mounts a plain `emptyDir` at `/tmp` on every app pod; do not switch it to a `noexec` mount. onnxruntime maps `libonnxruntime.so` from `/tmp`.
+  - With `readOnlyRootFilesystem`, nginx-unprivileged also needs writable `/var/cache/nginx` and `/etc/nginx/conf.d` (the entrypoint renders the template there). See the comment in `templates/ui.yaml`.
+  - Fill in the empty `podSecurityContext`/`securityContext` values. Add ServiceAccounts with `automountServiceAccountToken: false`, NetworkPolicies (selectors via `helpdesk.selectorLabels`; the assistant also needs egress to the OIDC issuer for JWKS, to Ollama and OTLP), the Ingress for `publicHost` → `<release>-oauth2-proxy:4180`, and ExternalSecrets that create the Secrets named under `secrets.*` (names and keys are in `values.yaml`). oauth2-proxy already runs with `OAUTH2_PROXY_REVERSE_PROXY=true`.
+  - The assistant Service exposes only 8080. Prometheus scraping of 9090 (or 8081/8082) needs a ServiceMonitor/PodMonitor or pod annotations, which is A19's side, plus a NetworkPolicy rule.
+- **C11c:**
+  - `ollama.capacity.{replicas,numParallel}` are meant to drive the StatefulSet replicas and `OLLAMA_NUM_PARALLEL`, so the capacity guard stays true. Replace `ollama.url` with the in-chart Service.
+  - `assistant.kb` is the KB ConfigMap hook (`KB_LOCATION=file:/kb/*.md`, checksum annotation).
+  - `ticketServer.java.db.url` and `requestLogServer.db.url` are the Postgres hooks.
+- **C15 (README/HOW_IT_WORKS), collected from merged PRs:**
+  - `/sse` became `/mcp`: the curl and MCP Inspector examples change to `http://localhost:8081/mcp` and `http://localhost:8082/mcp`.
+  - The Rust server is a legacy SSE reference (D2): not deployed, and only usable with SSE clients and the contract tests.
+  - Document `OLLAMA_NUM_PREDICT` (default 1024; -1 = no cap).
+  - The `Customer:` line, and the model calling `listCustomers` (A8).
+  - `createTicket` needs the `tickets-write` role (A9).
+  - The assistant starts without the MCP servers (lazy start, reconnects by itself, A15).
+  - Also mention the Helm chart (`deploy/helm/helpdesk`, `check.sh`).
+- **Optional compose follow-ups:** drop the assistant's `depends_on: request-log-mcp-server` (lazy MCP start, A15). The E2E smoke could set `OLLAMA_NUM_PREDICT=256` for the assistant, so a looping qwen2.5:0.5b ends after about 5 s.
+- The worktree guard rejects compound Bash commands (`mkdir && cd && heredoc`) and "github" strings in complex forms. Use the Write/Edit tools for files and keep Bash commands simple.
+- The Docker images `alpine/helm:3.17.3`, `ghcr.io/yannh/kubeconform:v0.7.0` and `rhysd/actionlint:1.7.7` are still pulled locally.

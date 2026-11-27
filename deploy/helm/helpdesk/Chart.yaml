@@ -1,0 +1,13 @@
+apiVersion: v2
+name: helpdesk
+description: >-
+  Resolva helpdesk assistant: assistant, ticket MCP server (Java or Python), request-log MCP
+  server, UI and oauth2-proxy.
+type: application
+# Chart version. The release workflow (C13) sets it and appVersion from the git tag.
+version: 0.1.0
+# Default image tag for every component (global.imageTag overrides it). images.yml publishes
+# <major>.<minor>.<patch> on v* tags and sha-<short> on main.
+appVersion: "0.1.0"
+# preStop uses the native "sleep" lifecycle action (enabled by default since Kubernetes 1.30).
+kubeVersion: ">=1.30.0-0"

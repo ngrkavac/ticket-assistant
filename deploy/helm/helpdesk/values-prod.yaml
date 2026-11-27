@@ -1,0 +1,53 @@
+# Production: at least two replicas of everything, so a node drain or rollout keeps the service
+# up (PodDisruptionBudgets allow one pod down at a time). Applied on top of values.yaml:
+#   helm upgrade --install helpdesk deploy/helm/helpdesk -n helpdesk \
+#     -f deploy/helm/helpdesk/values-prod.yaml --set global.imageTag=<release version>
+# Host names and URLs below are placeholders: replace them with the real production ones.
+# Secrets are not set here; the Secrets named in values.yaml ("secrets") must exist (C11b).
+# Replica counts and resources are starting points: tune them after the load test (T6.4, B13).
+
+global:
+  # A release version (images.yml tags v1.2.3 as 1.2.3). Empty = the chart's appVersion, which
+  # the release workflow (C13) sets from the tag. Prefer per-component digests where possible.
+  imageTag: ""
+
+publicHost: helpdesk.example.com
+
+oidc:
+  issuerUri: https://sso.example.com/realms/helpdesk
+
+ollama:
+  # C11c replaces this with the in-chart Ollama StatefulSet on the GPU node pool.
+  url: http://ollama.ollama.svc.cluster.local:11434
+  # 2 Ollama replicas x 4 parallel = 8 chats at once; the assistant may use at most that many:
+  # hpa.maxReplicas 4 x maxConcurrentRequests 2 = 8.
+  capacity:
+    replicas: 2
+    numParallel: 4
+
+assistant:
+  maxConcurrentRequests: 2
+  hpa:
+    minReplicas: 2
+    maxReplicas: 4
+
+ticketServer:
+  implementation: java
+  replicas: 2
+  java:
+    db:
+      # C11c: managed Postgres or CloudNativePG.
+      url: jdbc:postgresql://tickets-db.helpdesk.svc.cluster.local:5432/tickets
+
+requestLogServer:
+  replicas: 2
+  retention: P90D
+  db:
+    url: jdbc:postgresql://request-log-db.helpdesk.svc.cluster.local:5432/requestlog
+
+ui:
+  replicas: 2
+
+oauth2Proxy:
+  replicas: 2
+  backendLogoutUrl: https://sso.example.com/realms/helpdesk/protocol/openid-connect/logout?id_token_hint={id_token}

@@ -1,0 +1,23 @@
+{{- /*
+Checks that need the whole values tree. Renders nothing; fails the install/template on a mistake.
+*/ -}}
+{{- $impl := .Values.ticketServer.implementation -}}
+{{- if not (has $impl (list "java" "python")) -}}
+{{- fail (printf "ticketServer.implementation must be java or python, not %q (the Rust server is a legacy SSE reference and is never deployed, D2)" $impl) -}}
+{{- end -}}
+{{- if and (eq $impl "python") (gt (int .Values.ticketServer.replicas) 1) -}}
+{{- fail "ticketServer.replicas must be 1 for the python implementation: each replica keeps its own in-memory tickets" -}}
+{{- end -}}
+{{- /* T3.6: the assistant must not send Ollama more parallel chats than it can serve. */ -}}
+{{- if .Values.ollama.enforceCapacity -}}
+{{- $a := .Values.assistant -}}
+{{- $pods := ternary $a.hpa.maxReplicas $a.replicas $a.hpa.enabled -}}
+{{- $demand := mul $pods $a.maxConcurrentRequests -}}
+{{- $supply := mul .Values.ollama.capacity.replicas .Values.ollama.capacity.numParallel -}}
+{{- if gt (int64 $demand) (int64 $supply) -}}
+{{- fail (printf "Ollama capacity exceeded: %d assistant pods x maxConcurrentRequests %d = %d parallel chats, but ollama.capacity allows %d replicas x numParallel %d = %d. Lower assistant.hpa.maxReplicas/replicas or maxConcurrentRequests, or raise ollama.capacity (or set ollama.enforceCapacity=false)." (int64 $pods) (int64 $a.maxConcurrentRequests) (int64 $demand) (int64 .Values.ollama.capacity.replicas) (int64 .Values.ollama.capacity.numParallel) (int64 $supply)) -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.assistant.hpa.enabled (gt (int .Values.assistant.hpa.minReplicas) (int .Values.assistant.hpa.maxReplicas)) -}}
+{{- fail "assistant.hpa.minReplicas must not be greater than assistant.hpa.maxReplicas" -}}
+{{- end -}}
