@@ -21,6 +21,7 @@ on:
       - ui/nginx.conf.template
       - ticket-mcp-server-python/Dockerfile
       - deploy/keycloak/**
+      - deploy/docker/**
       - pom.xml
       - '*/pom.xml'
       - '*/src/main/resources/application*.properties'
@@ -72,6 +73,15 @@ jobs:
         run: docker compose up --detach --wait --wait-timeout 900
       - name: Smoke test
         run: bash .github/e2e/smoke.sh
+      - name: Embedding model and natives came from the image
+        # The assistant image bakes the ONNX model, its tokenizer and DJL's native libraries
+        # (T3.5), so the assistant must not have downloaded anything at startup.
+        run: |
+          if docker compose logs --no-color assistant | grep -E 'Downloading|publish\.djl\.ai|githubusercontent\.com'; then
+            echo "::error::The assistant downloaded embedding files at startup instead of using the baked ones"
+            exit 1
+          fi
+          docker compose logs --no-color assistant | grep -F 'file:/opt/models/all-MiniLM-L6-v2/model.onnx'
       - name: Container status and logs
         if: failure()
         run: |

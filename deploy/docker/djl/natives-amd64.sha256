@@ -1,0 +1,7 @@
+025975e25b335af817993aed26aeeec5ae66495baa05f38638e59d914f6f0d8b  ./pytorch/2.5.1-cpu-linux-x86_64/0.32.0-libdjl_torch.so
+6687e69555f35df073ef869b26466efc80b200cbb4fadcaa7b7f16cf17b2c8c3  ./pytorch/2.5.1-cpu-linux-x86_64/libc10.so
+6b254201cafdc5389580d77139398a298f63ce3b139cfbcceade961ac0d721cb  ./pytorch/2.5.1-cpu-linux-x86_64/libgomp-98b21ff3.so.1
+52708eda8e6246e306671f3bb94fc3013dd0bf83b2558e0956fcc6812d879140  ./pytorch/2.5.1-cpu-linux-x86_64/libtorch.so
+01bcd5a745b446d440c72d78e8238fbb459a525b65c43a7f8085b4098b405d82  ./pytorch/2.5.1-cpu-linux-x86_64/libtorch_cpu.so
+c10309390d73cad4eb3d4786b15ede52ef68f1bae3efe6413a7c5abad4790021  ./pytorch/2.5.1.txt
+542ea366a39f1d37965691a335b988eec96def795f6e5272a00f385534743667  ./tokenizers/0.21.0-0.32.0-cpu-linux-x86_64/libtokenizers.so
