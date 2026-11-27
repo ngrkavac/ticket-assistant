@@ -1,7 +1,7 @@
 [project]
 name = "ticket-mcp-server-python"
 version = "1.0.0"
-description = "Ticket MCP server (Python implementation): getTicket, listOpenTickets, listTickets, listCustomers and createTicket over SSE"
+description = "Ticket MCP server (Python implementation): getTicket, listOpenTickets, listTickets, listCustomers and createTicket over Streamable HTTP"
 requires-python = ">=3.12"
 dependencies = ["mcp>=1.20,<2", "starlette>=0.40", "uvicorn>=0.30"]
 

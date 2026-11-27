@@ -24,7 +24,7 @@ def parse_origins(value: str) -> frozenset[str]:
 
 
 class ServiceAuthMiddleware:
-    """Pure ASGI middleware, so the SSE stream is passed through without buffering."""
+    """Pure ASGI middleware, so MCP's SSE response streams are passed through without buffering."""
 
     def __init__(self, app: ASGIApp, token: str, allowed_origins: frozenset[str]) -> None:
         self.app = app

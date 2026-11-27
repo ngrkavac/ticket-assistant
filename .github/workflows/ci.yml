@@ -76,24 +76,34 @@ jobs:
         include:
           # The Java server stores tickets in PostgreSQL (B7): the "local" profile adds the demo
           # data the contract tests expect, TICKETS_DB_URL points it at the database below.
+          # transport (K6, D2): Java and Python serve Streamable HTTP at /mcp; Rust is the legacy
+          # SSE-only reference server, so its run checks the HTTP+SSE transport instead.
           - impl: java
             context: .
             build-args: "MODULE=ticket-mcp-server-java"
+            transport: streamable
             database: true
             run-args: >-
               --network contract -e SPRING_PROFILES_ACTIVE=local
               -e TICKETS_DB_URL=jdbc:postgresql://tickets-db:5432/tickets
               -e TICKETS_DB_USER=tickets -e TICKETS_DB_PASSWORD=contract-only
-          - {impl: python, context: ticket-mcp-server-python, build-args: ""}
-          - {impl: rust, context: ticket-mcp-server-rust, build-args: ""}
+          - {impl: python, context: ticket-mcp-server-python, build-args: "", transport: streamable}
+          - {impl: rust, context: ticket-mcp-server-rust, build-args: "", transport: sse}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Java: start the image build from the cached Maven dependencies (see .github/actions/maven-seed)
+      # instead of downloading them from Maven Central again.
+      - if: matrix.impl == 'java'
+        id: seed
+        uses: ./.github/actions/maven-seed
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        timeout-minutes: 20
         with:
           context: ${{ matrix.context }}
           build-args: ${{ matrix.build-args }}
+          build-contexts: ${{ matrix.impl == 'java' && format('maven-seed={0}', steps.seed.outputs.dir) || '' }}
           tags: ticket-mcp-server-${{ matrix.impl }}
           load: true
           cache-from: type=gha,scope=${{ matrix.impl }}
@@ -124,6 +134,6 @@ jobs:
       - name: Contract tests
         working-directory: ticket-mcp-contract-tests
         run: uv sync --locked && uv run pytest -v
-        env: {TICKETS_MCP_URL: "http://localhost:8081"}
+        env: {TICKETS_MCP_URL: "http://localhost:8081", TICKETS_MCP_TRANSPORT: "${{ matrix.transport }}"}
       - if: always()
         run: docker logs server

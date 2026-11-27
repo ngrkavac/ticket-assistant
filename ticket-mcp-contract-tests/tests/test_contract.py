@@ -1,7 +1,8 @@
 """Black-box contract every ticket-mcp-server implementation (Java, Python, Rust) must satisfy.
 
 Run against a live server: TICKETS_MCP_URL=http://localhost:8081 uv run pytest
-Set MCP_SERVICE_TOKEN to the server's token if it has one (K5).
+Set MCP_SERVICE_TOKEN to the server's token if it has one (K5), and TICKETS_MCP_TRANSPORT=sse for
+the legacy SSE-only Rust server (default: streamable, K6).
 Expected values were captured from the original Java (Spring AI) implementation.
 """
 
@@ -320,12 +321,76 @@ async def test_unknown_tool_is_a_json_rpc_error(mcp):
     assert raised.value.error.data == "Tool not found: deleteTicket"
 
 
-async def test_raw_sse_transport_without_redirects(base_url, auth_headers):
+# The first message Spring AI's client sends.
+def initialize_request(protocol_version: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": protocol_version,
+            "capabilities": {},
+            "clientInfo": {"name": "contract-tests", "version": "1.0.0"},
+        },
+    }
+
+
+async def test_raw_streamable_http_without_redirects(base_url, auth_headers, transport):
+    """Speaks Streamable HTTP (K6) by hand with redirects disabled.
+
+    The MCP Python client follows same-origin redirects (e.g. /mcp to /mcp/); Spring AI's Java
+    client (used by the assistant) does not, so /mcp must answer directly. The servers run the
+    stateless mode: no Mcp-Session-Id, one JSON response per POST, and every request stands on its
+    own, so any replica behind a load balancer can answer it.
+    """
+    if transport != "streamable":
+        pytest.skip("Streamable HTTP is not served by this (legacy SSE) server")
+    accept = {"Accept": "application/json, text/event-stream"}
+    async with httpx.AsyncClient(
+        base_url=base_url, follow_redirects=False, timeout=10, headers=auth_headers
+    ) as client:
+        response = await client.post("/mcp", json=initialize_request("2025-06-18"), headers=accept)
+        assert response.status_code == 200, response.status_code
+        assert response.headers["content-type"].startswith("application/json")
+        assert "mcp-session-id" not in response.headers, "stateless: no session"
+        message = response.json()
+        assert message["id"] == 1
+        assert message["result"]["protocolVersion"] == "2025-06-18"
+        assert message["result"]["serverInfo"]["name"] == "ticket-server"
+
+        initialized = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        response = await client.post("/mcp", json=initialized, headers=accept)
+        assert response.status_code == 202, response.status_code
+
+        # A request on its own, as if it reached another replica.
+        listing = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+        response = await client.post("/mcp", json=listing, headers=accept)
+        assert response.status_code == 200, response.status_code
+        assert len(response.json()["result"]["tools"]) == 5
+
+        # No server-to-client stream: the server never calls the client.
+        response = await client.get("/mcp", headers={"Accept": "text/event-stream"})
+        assert response.status_code == 405, response.status_code
+
+
+async def test_the_other_transport_is_not_served(base_url, auth_headers, transport):
+    """K6: Java and Python serve only Streamable HTTP (no /sse); Rust only SSE (no /mcp)."""
+    async with httpx.AsyncClient(base_url=base_url, timeout=10, headers=auth_headers) as client:
+        if transport == "streamable":
+            response = await client.get("/sse", headers={"Accept": "text/event-stream"})
+        else:
+            response = await client.post("/mcp", json=initialize_request("2025-06-18"))
+    assert response.status_code == 404, response.status_code
+
+
+async def test_raw_sse_transport_without_redirects(base_url, auth_headers, transport):
     """Speaks the HTTP+SSE transport by hand with redirects disabled.
 
     The MCP Python client quietly follows redirects; Spring AI's Java client (used by the
     assistant) does not, so the message endpoint must accept the POST directly.
     """
+    if transport != "sse":
+        pytest.skip("legacy HTTP+SSE transport, see test_raw_streamable_http_without_redirects")
     async with (
         httpx.AsyncClient(
             base_url=base_url, follow_redirects=False, timeout=10, headers=auth_headers
@@ -351,18 +416,7 @@ async def test_raw_sse_transport_without_redirects(base_url, auth_headers):
         assert name == "endpoint"
         assert endpoint.startswith("/mcp/message?")
 
-        # The first message Spring AI's client sends (it asks for 2024-11-05 too).
-        initialize = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "contract-tests", "version": "1.0.0"},
-            },
-        }
-        response = await client.post(endpoint, json=initialize)
+        response = await client.post(endpoint, json=initialize_request("2024-11-05"))
         assert 200 <= response.status_code < 300, response.status_code
 
         name, data = await next_event()
@@ -383,24 +437,24 @@ async def test_readiness_endpoint(base_url):
 # --- service auth (K5) -----------------------------------------------------------------------
 
 
-async def test_browser_origin_is_rejected(base_url, auth_headers):
+async def test_browser_origin_is_rejected(base_url, auth_headers, mcp_path):
     """MCP_ALLOWED_ORIGINS is empty by default, so any Origin header gets 403, token or not."""
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
         response = await client.post(
-            "/mcp/message",
+            mcp_path,
             json={},
             headers={**auth_headers, "Origin": "https://evil.example"},
         )
     assert response.status_code == 403
 
 
-async def test_missing_or_wrong_token_is_rejected(base_url, service_token):
+async def test_missing_or_wrong_token_is_rejected(base_url, service_token, mcp_path):
     if not service_token:
         pytest.skip("MCP_SERVICE_TOKEN is not set: the server under test runs without a token")
     async with httpx.AsyncClient(base_url=base_url, timeout=10) as client:
-        missing = await client.get("/sse")
+        missing = await client.post(mcp_path, json={})
         wrong = await client.post(
-            "/mcp/message", json={}, headers={"Authorization": f"Bearer {service_token}x"}
+            mcp_path, json={}, headers={"Authorization": f"Bearer {service_token}x"}
         )
     assert missing.status_code == 401
     assert missing.headers["www-authenticate"] == "Bearer"

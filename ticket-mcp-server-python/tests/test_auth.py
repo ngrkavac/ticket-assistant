@@ -1,4 +1,4 @@
-"""Service token and Origin check on the MCP endpoints (K5)."""
+"""Service token and Origin check on the MCP endpoint (K5)."""
 
 import pytest
 from starlette.testclient import TestClient
@@ -11,20 +11,23 @@ ENV = {
     "MCP_SERVICE_TOKEN": TOKEN,
     "MCP_ALLOWED_ORIGINS": "http://localhost:6274, https://inspector.example",
 }
+ACCEPT = "application/json, text/event-stream"
 
 
 @pytest.fixture
 def client():
-    return TestClient(build_app(ENV))
+    # "with" runs the lifespan, which starts the Streamable HTTP session manager.
+    with TestClient(build_app(ENV)) as client:
+        yield client
 
 
 def post(client, **headers):
-    # No session id: the MCP transport itself rejects the message (400) once auth let it pass.
-    return client.post("/mcp/message", json={}, headers=headers)
+    # Not a JSON-RPC message: the MCP transport itself rejects it (400) once auth let it pass.
+    return client.post("/mcp", json={}, headers={"accept": ACCEPT, **headers})
 
 
 def test_requests_without_the_token_get_401(client):
-    missing = client.get("/sse")
+    missing = client.get("/mcp")
     assert missing.status_code == 401
     assert missing.headers["www-authenticate"] == "Bearer"
     assert post(client, authorization="Bearer wrong").status_code == 401
@@ -33,7 +36,7 @@ def test_requests_without_the_token_get_401(client):
     assert post(client, authorization="Bearer").status_code == 401
 
 
-def test_requests_with_the_token_reach_the_mcp_endpoints(client):
+def test_requests_with_the_token_reach_the_mcp_endpoint(client):
     assert post(client, authorization=f"Bearer {TOKEN}").status_code == 400
     assert post(client, authorization=f"bearer {TOKEN}").status_code == 400
 
@@ -56,9 +59,9 @@ def test_probes_need_no_token(client):
 
 
 def test_blank_token_disables_only_the_token_check():
-    client = TestClient(build_app({"MCP_SERVICE_TOKEN": " "}))
-    assert post(client).status_code == 400
-    assert post(client, origin="http://localhost:6274").status_code == 403
+    with TestClient(build_app({"MCP_SERVICE_TOKEN": " "})) as client:
+        assert post(client).status_code == 400
+        assert post(client, origin="http://localhost:6274").status_code == 403
 
 
 def test_origin_list_is_trimmed_and_ignores_empty_entries():
