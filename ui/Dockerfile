@@ -19,6 +19,9 @@ FROM nginxinc/nginx-unprivileged:1.30.6-alpine@sha256:f5116ed4606f3eb015dd4a8e28
 # re-added as "~<major.minor>" with --upgrade to get the newest patch release of the same stable line.
 # The base image runs as the unprivileged nginx user (101), so the upgrade switches to root and back.
 USER root
+# CI passes the current date (images.yml), so this layer is not restored from the layer cache with
+# an old package index for more than a day. Unused here except as a cache key.
+ARG PACKAGE_REFRESH=unset
 RUN set -eu; \
     repo="https://nginx.org/packages/alpine/v$(cut -d. -f1,2 /etc/alpine-release)/main"; \
     line="$(nginx -v 2>&1 | sed 's|.*nginx/||' | cut -d. -f1,2)"; \
