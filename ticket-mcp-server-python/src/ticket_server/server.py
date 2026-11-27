@@ -1,23 +1,24 @@
-"""MCP server exposing the ticket tools over the SSE transport (GET /sse, POST /mcp/message).
+"""MCP server exposing the ticket tools over the Streamable HTTP transport at /mcp (K6).
 
 Uses the low-level MCP server API rather than FastMCP so the wire contract matches the Java
 implementation exactly: bare error messages, compact JSON text results, server version 1.0.0.
 """
 
+import contextlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import uvicorn
 from mcp import types
 from mcp.server.lowlevel import Server
-from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import McpError
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -33,7 +34,7 @@ from ticket_server.tickets import (
 
 SERVER_NAME = "ticket-server"
 SERVER_VERSION = "1.0.0"
-MESSAGE_PATH = "/mcp/message"
+MCP_PATH = "/mcp"
 
 _CUSTOMER = {"type": "string", "description": "Customer name, e.g. acme"}
 
@@ -190,23 +191,30 @@ class _AsgiEndpoint:
 
 def build_app(env: Mapping[str, str] = os.environ) -> Starlette:
     """The ASGI app; MCP_SERVICE_TOKEN and MCP_ALLOWED_ORIGINS are read from ``env`` (K5)."""
-    server = build_mcp_server()
-    sse = SseServerTransport(MESSAGE_PATH)
+    # Stateless and JSON, like the Java server: no Mcp-Session-Id, every POST is answered on its own
+    # with one JSON-RPC response, so any replica can serve any request. The server never calls the
+    # client, so there is no GET stream (405). Origin checks are left to ServiceAuthMiddleware (K5).
+    sessions = StreamableHTTPSessionManager(
+        app=build_mcp_server(), stateless=True, json_response=True
+    )
 
-    async def handle_sse(request: Request) -> Response:
-        async with sse.connect_sse(request.scope, request.receive, request._send) as (read, write):
-            await server.run(read, write, server.create_initialization_options())
-        return Response()
+    @contextlib.asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        async with sessions.run():
+            yield
 
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "UP"})
 
     return Starlette(
         routes=[
-            Route("/sse", handle_sse, methods=["GET"]),
-            # An exact route, not Mount(): Mount redirects /mcp/message to /mcp/message/ (307),
-            # which Spring AI's Java MCP client does not follow.
-            Route(MESSAGE_PATH, _AsgiEndpoint(sse.handle_post_message), methods=["POST"]),
+            # An exact route, not Mount(): Mount redirects /mcp to /mcp/ (307), which Spring AI's
+            # Java MCP client does not follow.
+            Route(
+                MCP_PATH,
+                _AsgiEndpoint(sessions.handle_request),
+                methods=["POST"],
+            ),
             Route("/actuator/health", health),
             Route("/actuator/health/liveness", health),
             Route("/actuator/health/readiness", health),
@@ -218,6 +226,7 @@ def build_app(env: Mapping[str, str] = os.environ) -> Starlette:
                 allowed_origins=parse_origins(env.get("MCP_ALLOWED_ORIGINS", "")),
             )
         ],
+        lifespan=lifespan,
     )
 
 

@@ -763,7 +763,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "mcp", specifier = ">=1.20,<2" },
+    { name = "mcp", specifier = ">=1.30,<2" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.8" },
 ]
