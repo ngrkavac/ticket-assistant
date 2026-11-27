@@ -84,6 +84,12 @@ jobs:
         run: |
           echo "::warning::Maven seed not in the cache, so this build downloads its dependencies from Maven Central"
           mkdir -p "$SEED_DIR"
+      # Dockerfiles that upgrade OS packages (ui: apk upgrade) declare ARG PACKAGE_REFRESH before that
+      # step. Its value changes daily, so the upgrade layer is rebuilt at least once a day instead of
+      # being restored from the layer cache with an old package index (the Trivy gate would then
+      # report CVEs whose fixes are already published). Other Dockerfiles ignore the argument.
+      - name: Package refresh date
+        run: echo "PACKAGE_REFRESH=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
       # Build once and load it into the local Docker engine. The same image (same digest) is
       # scanned, described by the SBOM, pushed and signed: nothing is rebuilt after the scan.
       # The timeout makes a build stuck on rate-limited downloads fail in minutes.
@@ -92,7 +98,9 @@ jobs:
         timeout-minutes: 20
         with:
           context: ${{ matrix.context }}
-          build-args: ${{ matrix.build-args }}
+          build-args: |
+            ${{ matrix.build-args }}
+            PACKAGE_REFRESH=${{ env.PACKAGE_REFRESH }}
           build-contexts: ${{ matrix.maven && format('maven-seed={0}', needs.maven-seed.outputs.dir) || '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
