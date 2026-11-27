@@ -1,6 +1,9 @@
-# Stream a handoff – 2026-11-27
+# Stream a handoff – 2026-11-27 (A15 E2E fix)
 ## Done this session
-- A15 [L] – `prod/a15-streamable-http` (base `main` d2f5609)
+- A15 E2E fix (no new task): commit `acb79bc` on `prod/a15-streamable-http-fix`, a fast-forward of `origin/prod/a15-streamable-http` (890b534). Push it as `prod/a15-streamable-http`: `git push origin prod/a15-streamable-http-fix:prod/a15-streamable-http`.
+  - Root cause of the failing smoke (run 45982693909, `POST /ask` 502 after 30 s): qwen2.5:0.5b got stuck in a generation loop, not A15. The `/api/chat` request A15 sends (captured with a logging proxy, A15 assistant + B10 ticket server) is byte-identical to the one main sent before A15 (d2f5609 assistant + SSE ticket server): same system prompt, RAG context, tools, names, schemas, options. Without `createTicket` (acme-agent has no write role) it is 696 prompt tokens, exactly what CI's Ollama logged. Replayed 12 times against qwen2.5:0.5b, 11 answers stopped after 84–188 tokens and 1 ran into the limit: the loop is random (temperature 0.2), so the earlier green runs were luck.
+  - Fix: `spring.ai.ollama.chat.options.num-predict=${OLLAMA_NUM_PREDICT:1024}` (`-1` = no limit), test `OllamaChatPropertiesTests`; checked that Ollama receives `num_predict: 1024`. 206 tests, coverage gate met.
+- A15 [L] – `prod/a15-streamable-http` (base `main` d2f5609), earlier session
 
 ## Ready to push
 ### `prod/a15-streamable-http` (base: `main`)
@@ -30,9 +33,11 @@ Stream A, task A15 (T3.1 client side + T3.2). Synced with B10 (S2): **merge righ
   - With the ticket server stopped it returned 503. After a restart it returned 200 on the first request.
   - `/questions` through the request-log server returned 200.
 - No contract change (K5 and K6 as written).
+- Generation cap: `spring.ai.ollama.chat.options.num-predict=${OLLAMA_NUM_PREDICT:1024}`. The E2E smoke failed once because qwen2.5:0.5b got stuck in a loop and kept generating until oauth2-proxy's 30 s timeout (502). That was not caused by this PR: the request sent to Ollama is byte-identical to the one from `main` before it (captured and compared), and replaying it shows the tiny model loops in about 1 of 12 calls. With the cap, such a call ends after 1024 tokens with a shorter answer instead of holding `/ask`. `OLLAMA_NUM_PREDICT=-1` turns the cap off.
 
 **Needs from stream C:**
 - `README.md`/`HOW_IT_WORKS.md` (C15): the assistant uses Streamable HTTP at `/mcp`. MCP Inspector and `curl` examples should use `http://localhost:8081/mcp` and `http://localhost:8082/mcp`, not `/sse`. The assistant starts without MCP servers and reconnects by itself.
+- E2E smoke (`.github/e2e`/workflow): set `OLLAMA_NUM_PREDICT=256` for the assistant, so a looping qwen2.5:0.5b ends after about 5 s (CI generates ~55 tokens/s; 1024 tokens take ~19 s). README/HOW_IT_WORKS should list `OLLAMA_NUM_PREDICT`.
 - `docker-compose.yml` (optional): the assistant no longer needs `depends_on: request-log-mcp-server: service_healthy`. `TICKETS_MCP_URL`/`REQUEST_LOG_MCP_URL` stay as they are (base URLs).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -53,4 +58,5 @@ nothing
 - `AssistantIntegrationTests.Fakes` no longer defines a `ToolCallbackProvider`. `ChatConfig.mcpToolCallbacks` with no MCP clients (`spring.ai.mcp.client.enabled=false`) gives no tools. A test that needs fake tools must override it with `@Primary`.
 - The MCP SDK logs `LifecycleInitializer: Handling exception` at WARN with a stack trace whenever a server is unreachable. This is expected noise.
 - The worktree sandbox rejects `pkill` and compound git+heredoc commands. Kill your own processes by the PID from `lsof -tiTCP:<port> -sTCP:LISTEN`, and run Python edit scripts from the scratchpad.
-- `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant`, then `./mvnw -pl assistant -am verify`: 204 tests, green. A full `./mvnw verify` was green before the stateless test variant was added. That variant touches only assistant tests.
+- Debugging what the model receives: a tiny Python proxy in front of Ollama that dumps each `/api/chat` body (Spring's client sends chunked bodies), plus the assistant jar with `--spring.profiles.active=local --helpdesk.request-log.enabled=false` and the ticket server jar with `--spring.profiles.active=local` (H2 demo data) on spare ports. No Keycloak needed.
+- `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant`, then `./mvnw -pl assistant -am verify`: 206 tests, green. A full `./mvnw verify` was green before the stateless test variant was added. That variant touches only assistant tests.
