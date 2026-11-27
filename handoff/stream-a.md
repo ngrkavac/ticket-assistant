@@ -1,44 +1,45 @@
-# Stream a handoff – 2026-11-27 (A15 E2E fix)
+# Stream a handoff – 2026-11-27
 ## Done this session
-- A15 E2E fix (no new task): commit `acb79bc` on `prod/a15-streamable-http-fix`, a fast-forward of `origin/prod/a15-streamable-http` (890b534). Push it as `prod/a15-streamable-http`: `git push origin prod/a15-streamable-http-fix:prod/a15-streamable-http`.
-  - Root cause of the failing smoke (run 45982693909, `POST /ask` 502 after 30 s): qwen2.5:0.5b got stuck in a generation loop, not A15. The `/api/chat` request A15 sends (captured with a logging proxy, A15 assistant + B10 ticket server) is byte-identical to the one main sent before A15 (d2f5609 assistant + SSE ticket server): same system prompt, RAG context, tools, names, schemas, options. Without `createTicket` (acme-agent has no write role) it is 696 prompt tokens, exactly what CI's Ollama logged. Replayed 12 times against qwen2.5:0.5b, 11 answers stopped after 84–188 tokens and 1 ran into the limit: the loop is random (temperature 0.2), so the earlier green runs were luck.
-  - Fix: `spring.ai.ollama.chat.options.num-predict=${OLLAMA_NUM_PREDICT:1024}` (`-1` = no limit), test `OllamaChatPropertiesTests`; checked that Ollama receives `num_predict: 1024`. 206 tests, coverage gate met.
-- A15 [L] – `prod/a15-streamable-http` (base `main` d2f5609), earlier session
+- A11 – `prod/a11-rate-limit` (base `main` e2a22b6), commit `ad596f4`
+- A12 – `prod/a12-authz-matrix` (base `prod/a11-rate-limit`), commit `1937319` (+ this handoff commit)
 
 ## Ready to push
-### `prod/a15-streamable-http` (base: `main`)
-**Merge right after B10 (S2).** MCP is broken on `main` between the two merges: before B10 the servers only serve `/sse`, after B10 alone the assistant still asks for `/sse`.
-
-**PR title:** Assistant: MCP over Streamable HTTP, lazy start and reconnect (A15)
+### `prod/a11-rate-limit` (base: `main`)
+**PR title:** Assistant: per-user rate limit on /ask with Bucket4j (A11)
 
 **PR body:**
-Stream A, task A15 (T3.1 client side + T3.2). Synced with B10 (S2): **merge right after B10**.
+Stream A, task A11 (T1.8).
 
-- Transport (K6): both connections use `spring.ai.mcp.client.streamable-http.connections.{tickets,requestlog}` with endpoint `/mcp`. `TICKETS_MCP_URL` and `REQUEST_LOG_MCP_URL` stay base URLs (`http://host:8081`, `http://host:8082`), so compose and Helm values need no change. The SSE connections are gone.
-- Lazy start: `spring.ai.mcp.client.initialized=false`. The assistant starts with MCP servers down. `/customers`, `/ask` and the history endpoints answer 503 until a server is reachable. The MCP SDK opens the connection on the first call and tries again on every later call. Listing the ticket tools for `/ask` now raises `TicketsUnavailableException` (503) and no longer a generic error.
-- Reconnect: new `McpClientSupervisor`. B10's servers are stateless, so a restart only fails the calls made while the server is down, and the next call works. Against a stateful Streamable HTTP server, the SDK reopens a lost session by itself, so the client never has to be recreated. Only the call that hits the lost session fails, and the supervisor repeats it once. That repeat covers reads, `logRequest` (whose request id is unique) and `addQuestion` (idempotent). `createTicket` is never repeated, so a ticket cannot be created twice.
-- The model's tools: a new `ChatConfig.mcpToolCallbacks` lists tools only on the ticket connection. It replaces Spring AI's provider (`spring.ai.mcp.client.toolcallback.enabled=false`), which also listed the request-log server's tools, so a request-log server that is down would have failed every `/ask`. `McpToolFilter`, `CustomerScopedToolCallback` and the per-user tool filter (A8/A9) are unchanged.
-- K5: the service token goes on every Streamable HTTP request (POST, GET, DELETE). Tests check this against servers that answer 401 without it.
-- Tests: `TestMcpServer` is an in-process MCP server (MCP SDK servlet transport on embedded Tomcat) with the K5 token check, in stateless mode (as B10) and in stateful mode. `StatelessMcpReconnectTests` and `StatefulMcpReconnectTests` cover these cases:
-  - the app starts with both servers down and connects once they are up;
-  - both servers restart, every call still succeeds and the clients are the same objects;
-  - a server is down for a while, then comes back;
-  - each server gets its own token;
-  - `createTicket` runs at most once across a restart;
-  - the model gets only ticket tools, which work while the request log is down.
-  Unit tests cover `McpClientSupervisor`, the retry rules in `CustomerScopedToolCallback` and `ModelTools`, the new provider, and the `application.properties` binding. 204 tests, coverage gate met.
-- Tested against B10's stateless servers: I built `ticket-mcp-server-java` and `request-log-mcp-server` from `prod/b10-streamable-http` (local profile, `MCP_SERVICE_TOKEN` set) and ran the assistant jar from this branch with the matching tokens.
-  - It started with no server up, and `/customers` returned 503.
-  - After the ticket server started, `/customers` returned 200.
-  - With the ticket server stopped it returned 503. After a restart it returned 200 on the first request.
-  - `/questions` through the request-log server returned 200.
-- No contract change (K5 and K6 as written).
-- Generation cap: `spring.ai.ollama.chat.options.num-predict=${OLLAMA_NUM_PREDICT:1024}`. The E2E smoke failed once because qwen2.5:0.5b got stuck in a loop and kept generating until oauth2-proxy's 30 s timeout (502). That was not caused by this PR: the request sent to Ollama is byte-identical to the one from `main` before it (captured and compared), and replaying it shows the tiny model loops in about 1 of 12 calls. With the cap, such a call ends after 1024 tokens with a shorter answer instead of holding `/ask`. `OLLAMA_NUM_PREDICT=-1` turns the cap off.
+- New `AskRateLimiter`: each user (JWT `sub`) may ask `helpdesk.rate-limit.asks-per-minute` questions per minute (env `RATE_LIMIT_ASKS_PER_MINUTE`, K8; default 20; `0` turns the limit off). Bucket4j greedy refill, so a user can ask a burst of 20 and then one every 3 s.
+- Further asks get **429** with `Retry-After` = seconds until the next ask is allowed (rounded up), and the detail "You have asked too many questions in a short time. Please wait a moment." (different from the "assistant is busy" 429 of the global semaphore). Rejections are counted in `helpdesk_ask_rejected_total{reason="rate_limit"}` (K9).
+- Checked in `AssistantController` after body validation and before the customer checks: an ask denied for its customer (403) also counts, so the limit also slows down probing. Invalid bodies (400) and requests without a valid token (401/403 by role) do not count.
+- Buckets are in memory per pod (accepted by T1.8): with N replicas a user gets up to N × the limit. They live in a Caffeine cache (expire after 1 min idle, when they are full anyway; at most 100 000 users).
+- Config: new `HelpdeskProperties.RateLimit` record (`helpdesk.rate-limit.asks-per-minute`, 0–100 000).
+- Dependency: `com.bucket4j:bucket4j_jdk17-core:8.22.0` in `assistant/pom.xml` (not in the Spring Boot BOM; the root pom is stream C's, so the version is in the module pom).
+- Tests: `AskRateLimiterTests` (fake clock: limit, Retry-After, per-user buckets, idle reset, 0 = off, metric), `RateLimitPropertiesTests` (env binding and default), new `AssistantControllerTests` cases (429 + Retry-After + no downstream call, 403 asks count, 400 asks do not). 217 tests, coverage gate met.
+
+**README needs:**
+- `RATE_LIMIT_ASKS_PER_MINUTE` (default 20, 0 = off): per-user limit on `/ask`, per pod. Over the limit: 429 with `Retry-After`.
 
 **Needs from stream C:**
-- `README.md`/`HOW_IT_WORKS.md` (C15): the assistant uses Streamable HTTP at `/mcp`. MCP Inspector and `curl` examples should use `http://localhost:8081/mcp` and `http://localhost:8082/mcp`, not `/sse`. The assistant starts without MCP servers and reconnects by itself.
-- E2E smoke (`.github/e2e`/workflow): set `OLLAMA_NUM_PREDICT=256` for the assistant, so a looping qwen2.5:0.5b ends after about 5 s (CI generates ~55 tokens/s; 1024 tokens take ~19 s). README/HOW_IT_WORKS should list `OLLAMA_NUM_PREDICT`.
-- `docker-compose.yml` (optional): the assistant no longer needs `depends_on: request-log-mcp-server: service_healthy`. `TICKETS_MCP_URL`/`REQUEST_LOG_MCP_URL` stay as they are (base URLs).
+- Compose/Helm (optional): pass `RATE_LIMIT_ASKS_PER_MINUTE` to the assistant if a non-default is wanted. The E2E smoke and k6 (B13) should stay under 20 asks per user per minute, or set it higher (B13 load test from one user will hit it: use several users or raise the limit for the run).
+- UI: a 429 from `/ask` now has two causes (busy or per-user limit); the `detail` text is user-readable and can be shown as is.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+### `prod/a12-authz-matrix` (base: `prod/a11-rate-limit`)
+**Branched from `prod/a11-rate-limit` (A11), merge after it.** The matrix test mocks A11's `AskRateLimiter`, which only exists on that branch. Once A11 is merged, GitHub retargets this PR to `main`.
+
+**PR title:** Assistant: auth/authz test matrix and cross-customer integration test (A12)
+
+**PR body:**
+Stream A, task A12 (T1.9). Tests only, no production code change. Based on the A11 PR (`prod/a11-rate-limit`), merge after it.
+
+- `AuthorizationMatrixTests` (`@WebMvcTest` of all four controllers with the real `SecurityConfig`): every endpoint (`POST /ask` for acme/globex, `GET /customers`, `GET /requests` for acme/globex/all, `GET /questions`, `POST /questions`) × every kind of user (no token, rejected token, no role, `tickets-write` only, acme agent, acme writer, globex agent, admin without agent role, admin) as a readable status table (72 cases). Requests carry real `Authorization: Bearer` headers; only the `JwtDecoder` is mocked, so the K1 claim mapping (`HelpdeskJwtConverter`) runs as in production (the `jwt()` post-processor would skip it). Every denied case is checked to reach neither the model, the ticket server nor the request log. Also: `/customers` only lists the token's customers, customer ids are case-insensitive, and a customer outside the token is 403 whether or not it exists (also `*`).
+- `CrossCustomerIntegrationTests` (`@SpringBootTest`): a fake model makes scripted tool calls through Spring AI's real `ToolCallingManager`, with in-memory ticket tools in place of the MCP server. Covers: the model asking for another customer's ticket is refused before the ticket server, audited (K4 `toolCalls` sent to the request log: `denied`) and counted (`helpdesk_tool_denied_total`); a call without customer is scoped to the request's customer; `" ACME "` is normalized; mixed calls in one turn (only the other customer's are refused, also `*`); an admin is still scoped to the request's customer; `createTicket` is offered only to writers and still scoped; 12 concurrent asks for acme and globex each keep their own customer. Checked that 4 of these tests fail when the customer check in `CustomerScopedToolCallback` is removed.
+- A guard test fails when an endpoint is added without adding it to the matrix.
+- `TestUsers.user(subject, …)` overload for users with distinct subjects.
+- 308 tests, coverage gate met.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
@@ -46,17 +47,15 @@ Stream A, task A15 (T3.1 client side + T3.2). Synced with B10 (S2): **merge righ
 none
 
 ## Next task
-A11 (T1.8, per-user rate limit with Bucket4j, `RATE_LIMIT_ASKS_PER_MINUTE`) – dependencies satisfied: yes (no ⛓). Then A12, A13.
+A13 (T3.3, health indicators `ticketsMcp`, `requestLogMcp`, `ollama`; readiness group) – dependencies satisfied: yes (A15 is merged). Then A17, A18.
 
 ## Blocked on
 nothing
 
 ## Notes for the next session
-- A15 changed `ChatConfig` and `application.properties`. If A15 is not merged yet, A13 (health indicators) should branch from `prod/a15-streamable-http`, and so should any task touching those files.
-- A13: there is no MCP readiness indicator yet. Readiness only reflects `readinessState` and `knowledgeBase`, and MCP outages show up as 503s on the API. A cheap probe is `client.listTools()` or `client.ping()` with a short timeout; stateless servers answer `tools/list` without initialize.
-- `TestMcpServer` (test sources) gives A12/A13 a real in-process MCP server: `new TestMcpServer(stateless, token, Map.of(tool, responseText)).start()`, plus `restart()`, `stop()`, `authorizations`, `calls(tool)`.
-- `AssistantIntegrationTests.Fakes` no longer defines a `ToolCallbackProvider`. `ChatConfig.mcpToolCallbacks` with no MCP clients (`spring.ai.mcp.client.enabled=false`) gives no tools. A test that needs fake tools must override it with `@Primary`.
-- The MCP SDK logs `LifecycleInitializer: Handling exception` at WARN with a stack trace whenever a server is unreachable. This is expected noise.
-- The worktree sandbox rejects `pkill` and compound git+heredoc commands. Kill your own processes by the PID from `lsof -tiTCP:<port> -sTCP:LISTEN`, and run Python edit scripts from the scratchpad.
-- Debugging what the model receives: a tiny Python proxy in front of Ollama that dumps each `/api/chat` body (Spring's client sends chunked bodies), plus the assistant jar with `--spring.profiles.active=local --helpdesk.request-log.enabled=false` and the ticket server jar with `--spring.profiles.active=local` (H2 demo data) on spare ports. No Keycloak needed.
-- `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant`, then `./mvnw -pl assistant -am verify`: 206 tests, green. A full `./mvnw verify` was green before the stateless test variant was added. That variant touches only assistant tests.
+- A11 added a component to `HelpdeskProperties` (`rateLimit`, last). Tests constructing it pass one more `null`. If A11 is not merged yet when a task touches `HelpdeskProperties`, `AssistantController` or `application.properties`, branch from `prod/a12-authz-matrix` (it contains A11).
+- `AssistantController` now needs an `AskRateLimiter`: `@WebMvcTest`s of it must `@MockitoBean AskRateLimiter`. `@SpringBootTest`s that ask more than 20 times per subject a minute must raise `helpdesk.rate-limit.asks-per-minute` (all `TestUsers` users share subject `user-1`; use the new `TestUsers.user(subject, …)`).
+- K9: A11 registers `helpdesk_ask_rejected_total{reason="rate_limit"}`. A17 should add the other reasons to the same counter name (`AskRateLimiter.REJECTED_METRIC`).
+- A fake model that really runs tools: `CrossCustomerIntegrationTests.ScriptedModel` (overrides `getDefaultOptions()` with `ToolCallingChatOptions`, otherwise ChatClient does not pass tool callbacks/context to the model) plus a `@Primary ToolCallbackProvider` in place of the MCP tools.
+- The worktree sandbox rejects multi-step `python3 - <<EOF` scripts that write several files and `sed -i` chained with heredocs; use the Edit tool or single-purpose commands.
+- `./mvnw com.spotify.fmt:fmt-maven-plugin:format -pl assistant`, then `./mvnw -pl assistant -am verify`: 308 tests, green.

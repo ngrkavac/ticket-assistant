@@ -31,8 +31,13 @@ final class TestUsers {
   }
 
   static RequestPostProcessor user(Set<String> roles, Set<String> customers, boolean all) {
-    var principal = new HelpdeskPrincipal("user-1", "user", roles, customers, all);
-    var jwt = Jwt.withTokenValue("token").header("alg", "none").subject("user-1").build();
+    return user("user-1", roles, customers, all);
+  }
+
+  static RequestPostProcessor user(
+      String subject, Set<String> roles, Set<String> customers, boolean all) {
+    var principal = new HelpdeskPrincipal(subject, "user", roles, customers, all);
+    var jwt = Jwt.withTokenValue("token").header("alg", "none").subject(subject).build();
     var authorities =
         roles.stream().sorted().<GrantedAuthority>map(SimpleGrantedAuthority::new).toList();
     return authentication(new HelpdeskJwtConverter.Authentication(jwt, principal, authorities));
