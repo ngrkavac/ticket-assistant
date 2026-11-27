@@ -11,6 +11,9 @@ RUN uv sync --locked --no-dev --no-editable
 FROM python:3.12-slim
 # Pull Debian security fixes that are newer than the base image (e.g. libzstd1 CVE-2026-124851),
 # so the Trivy gate in images.yml (HIGH/CRITICAL, fixed only) passes between base image rebuilds.
+# CI passes the current date (images.yml), so this layer is not restored from the layer cache with
+# an old package index for more than a day. Unused here except as a cache key.
+ARG PACKAGE_REFRESH=unset
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
