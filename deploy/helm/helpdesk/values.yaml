@@ -1,0 +1,296 @@
+# Defaults for every environment. values-staging.yaml and values-prod.yaml override them.
+# Render an environment with:
+#   helm template helpdesk deploy/helm/helpdesk -f deploy/helm/helpdesk/values-staging.yaml
+# A few values have no usable default (publicHost, oidc.issuerUri, the database URLs), so the
+# chart refuses to render without an environment file.
+#
+# Secrets: this file holds none, and the chart creates no Secret. Each component reads its
+# credentials from an existing Secret named under "secrets" below. C11b (External Secrets)
+# creates those Secrets from the secret store.
+#
+# Hooks for later tasks, so they are easy to find:
+#   C11b: securityContext/podSecurityContext/serviceAccount per component, NetworkPolicies,
+#         Ingress with TLS for publicHost, ExternalSecrets that produce the Secrets below.
+#   C11c: Ollama StatefulSet (replaces ollama.url), KB ConfigMap (assistant.kb), Postgres
+#         (replaces the *.db.url values).
+
+global:
+  # Images are pulled from <imageRegistry>/<component image name> (images.yml publishes them).
+  imageRegistry: ghcr.io/ngrkavac/ticket-assistant
+  # Default tag for all components; empty = the chart's appVersion. Prefer pinning by digest
+  # per component (image.digest), which wins over any tag.
+  imageTag: ""
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  # Spring profile of the Java services (K8). "prod" fails fast when required settings are missing.
+  springProfile: prod
+  # Tracing (K8). Empty endpoint = the variable is not set.
+  otlpEndpoint: ""
+  tracingSamplingProbability: "0.1"
+  # Spread each component's replicas over nodes (soft, so a small cluster still schedules them).
+  spreadAcrossNodes: true
+
+# Browser-facing host name, e.g. helpdesk.example.com. oauth2-proxy builds its redirect URL from
+# it. C11b adds the Ingress (TLS) for this host.
+publicHost: ""
+
+# OIDC provider (K1/K2). The issuer must be reachable from the pods: the assistant fetches the
+# signing keys and oauth2-proxy uses discovery.
+oidc:
+  issuerUri: ""
+  audience: helpdesk-assistant
+  # Optional: fetch the signing keys from here instead of the issuer's discovery document.
+  jwkSetUri: ""
+  rolesClaim: roles
+  customersClaim: customers
+
+# Names of the existing Secrets (and their keys) that hold credentials. The chart only
+# references them. Keys marked optional may be missing from the Secret.
+secrets:
+  # K5: shared bearer tokens between the assistant and the MCP servers.
+  mcpTokens:
+    name: helpdesk-mcp-tokens
+    ticketsKey: tickets-token
+    requestLogKey: request-log-token
+  # Tickets database (Java ticket server, D1). The migration user is optional (B8).
+  ticketsDb:
+    name: helpdesk-tickets-db
+    userKey: username
+    passwordKey: password
+    migrationUserKey: migration-username      # optional
+    migrationPasswordKey: migration-password  # optional
+  # Request-log database. The migration user is optional (B4).
+  requestLogDb:
+    name: helpdesk-request-log-db
+    userKey: username
+    passwordKey: password
+    migrationUserKey: migration-username      # optional
+    migrationPasswordKey: migration-password  # optional
+  # oauth2-proxy client credentials and cookie secret (16, 24 or 32 bytes).
+  oauth2Proxy:
+    name: helpdesk-oauth2-proxy
+    clientIdKey: client-id
+    clientSecretKey: client-secret
+    cookieSecretKey: cookie-secret
+
+# Ollama (LLM). Until C11c adds the StatefulSet, the chart points at an existing Ollama service.
+ollama:
+  url: http://ollama:11434
+  # Pinned model tag (T3.6). Must be the model the Ollama instance has pulled.
+  model: llama3.1:8b-instruct-q4_K_M
+  # Upper bound on tokens generated per chat call (OLLAMA_NUM_PREDICT). -1 = no cap.
+  numPredict: 1024
+  # Capacity of the Ollama deployment, used by the guard below (T3.6). C11c sets
+  # OLLAMA_NUM_PARALLEL from numParallel and the StatefulSet replicas from replicas.
+  capacity:
+    replicas: 2
+    numParallel: 4
+  # Refuse to render when assistant replicas (HPA maximum, or replicas without HPA) times
+  # assistant.maxConcurrentRequests exceeds replicas x numParallel. Without this, extra assistant
+  # pods only queue inside Ollama and every /ask gets slower.
+  enforceCapacity: true
+
+assistant:
+  image:
+    name: assistant
+    tag: ""
+    digest: ""
+  # Used only when hpa.enabled is false.
+  replicas: 2
+  # helpdesk.max-concurrent-requests: /ask calls one pod sends to Ollama at the same time
+  # (more wait briefly, then get 503 with Retry-After).
+  maxConcurrentRequests: 2
+  # Ports (K7): app 8080, management (actuator) 9090.
+  managementPort: 9090
+  # Rate limit per user (K8, A11). Empty = the assistant's default.
+  rateLimitAsksPerMinute: ""
+  # C11c: knowledge base from a ConfigMap (KB_LOCATION=file:/kb/*.md). Until then the KB built
+  # into the image is used.
+  kb: {}
+  resources:
+    requests: {cpu: "1", memory: 1536Mi}
+    # The JVM takes 75% of the limit as heap (MaxRAMPercentage in the image). The rest is for the
+    # ONNX and PyTorch natives used for embeddings. No CPU limit, to avoid throttling.
+    limits: {memory: 2Gi}
+  # T5.2: startup covers KB indexing and the embedding model load (about 3 minutes at most).
+  startupProbe: {periodSeconds: 5, failureThreshold: 36}
+  readinessProbe: {periodSeconds: 10, failureThreshold: 3}
+  livenessProbe: {periodSeconds: 10, failureThreshold: 3}
+  # Spring's graceful shutdown waits up to 30s for running requests (spring.lifecycle
+  # .timeout-per-shutdown-phase), after the preStop pause that lets endpoints drop the pod.
+  preStopSleepSeconds: 5
+  terminationGracePeriodSeconds: 45
+  pdb: {enabled: true, maxUnavailable: 1}
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+    # Scale on requests in flight per pod. Needs a custom metrics adapter (e.g. Prometheus
+    # Adapter) that serves metricName for the pods. Off by default.
+    inFlight:
+      enabled: false
+      metricName: http_server_requests_active_seconds_active_count
+      averageValue: "3"
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # C11b fills these in (runAsNonRoot, readOnlyRootFilesystem, drop ALL, seccomp RuntimeDefault).
+  podSecurityContext: {}
+  securityContext: {}
+
+# Ticket MCP server (K6: Streamable HTTP at /mcp on 8081). Exactly one implementation is
+# deployed. The Rust server is a legacy SSE reference and has no template (D2).
+ticketServer:
+  # java (tickets in Postgres, D1) or python (in-memory demo data, not for production).
+  implementation: java
+  # Stateless MCP, so replicas need no session affinity. Keep python at 1: every replica would
+  # have its own in-memory tickets.
+  replicas: 2
+  java:
+    image:
+      name: ticket-mcp-server-java
+      tag: ""
+      digest: ""
+    db:
+      # JDBC URL of the tickets database, e.g. jdbc:postgresql://host:5432/tickets.
+      url: ""
+      poolSize: 5
+      statementTimeout: 5s
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {memory: 512Mi}
+  python:
+    image:
+      name: ticket-mcp-server-python
+      tag: ""
+      digest: ""
+    # LOG_FORMAT of the Python server: text or json.
+    logFormat: json
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {memory: 256Mi}
+  # Origins allowed to call /mcp (K5). Empty = requests with an Origin header get 403.
+  allowedOrigins: ""
+  # Startup covers the Flyway migrations of the Java server.
+  startupProbe: {periodSeconds: 5, failureThreshold: 30}
+  readinessProbe: {periodSeconds: 10, failureThreshold: 3}
+  livenessProbe: {periodSeconds: 10, failureThreshold: 3}
+  preStopSleepSeconds: 5
+  terminationGracePeriodSeconds: 40
+  pdb: {enabled: true, maxUnavailable: 1}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext: {}
+  securityContext: {}
+
+# Request-log MCP server (K6: Streamable HTTP at /mcp on 8082). The daily purge is guarded by
+# ShedLock, so several replicas are fine.
+requestLogServer:
+  image:
+    name: request-log-mcp-server
+    tag: ""
+    digest: ""
+  replicas: 2
+  db:
+    # JDBC URL of the request-log database, e.g. jdbc:postgresql://host:5432/requestlog.
+    url: ""
+    poolSize: 5
+    statementTimeout: 5s
+  # K8: rows older than this are purged daily (ISO-8601, at least P1D).
+  retention: P90D
+  allowedOrigins: ""
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 512Mi}
+  startupProbe: {periodSeconds: 5, failureThreshold: 30}
+  readinessProbe: {periodSeconds: 10, failureThreshold: 3}
+  livenessProbe: {periodSeconds: 10, failureThreshold: 3}
+  preStopSleepSeconds: 5
+  terminationGracePeriodSeconds: 40
+  pdb: {enabled: true, maxUnavailable: 1}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext: {}
+  securityContext: {}
+
+# Web UI: static files behind nginx, which proxies the API to the assistant with the access token
+# from oauth2-proxy (K2). Only oauth2-proxy may reach it (C11b NetworkPolicy).
+ui:
+  image:
+    name: ui
+    tag: ""
+    digest: ""
+  replicas: 2
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  readinessProbe: {periodSeconds: 10, failureThreshold: 3}
+  livenessProbe: {periodSeconds: 10, failureThreshold: 3}
+  preStopSleepSeconds: 5
+  # nginx waits up to proxy_read_timeout (180s) for an /ask answer; let running answers finish.
+  terminationGracePeriodSeconds: 190
+  pdb: {enabled: true, maxUnavailable: 1}
+  extraEnv: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext: {}
+  securityContext: {}
+
+# oauth2-proxy in front of the UI (K2): sign-in at the OIDC provider, session cookie, access
+# token passed upstream. Same image and settings as docker-compose.yml, but with OIDC discovery
+# and a secure cookie.
+oauth2Proxy:
+  image:
+    repository: quay.io/oauth2-proxy/oauth2-proxy
+    tag: v7.15.6
+    digest: sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048
+  replicas: 2
+  providerDisplayName: Sign in
+  scope: openid profile email
+  emailDomains: "*"
+  # Shown in the UI as the user's roles (/oauth2/userinfo "groups").
+  groupsClaim: roles
+  cookieName: resolva_session
+  # Keycloak access tokens live 5 minutes: refresh them before they expire.
+  cookieRefresh: 4m
+  cookieExpire: 10h
+  # Timeout chain: Ingress (C11b) >= this >= nginx proxy_read_timeout (180s in the UI image).
+  upstreamTimeout: 190s
+  # Optional: also end the provider session on sign-out. For Keycloak:
+  # <issuer>/protocol/openid-connect/logout?id_token_hint={id_token}
+  backendLogoutUrl: ""
+  extraArgs: []
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 128Mi}
+  readinessProbe: {periodSeconds: 10, failureThreshold: 3}
+  livenessProbe: {periodSeconds: 10, failureThreshold: 3}
+  preStopSleepSeconds: 5
+  terminationGracePeriodSeconds: 200
+  pdb: {enabled: true, maxUnavailable: 1}
+  extraEnv: []
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext: {}
+  securityContext: {}

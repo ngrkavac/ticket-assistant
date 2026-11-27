@@ -1,0 +1,144 @@
+{{- $ctx := dict "root" $ "component" "assistant" "values" .Values.assistant -}}
+{{- $v := .Values.assistant -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  {{- if not $v.hpa.enabled }}
+  replicas: {{ $v.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "helpdesk.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helpdesk.labels" $ctx | nindent 8 }}
+      {{- with $v.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "helpdesk.podSpecCommon" $ctx | trim | nindent 6 }}
+      containers:
+        - name: assistant
+          image: {{ include "helpdesk.image" (dict "root" $ "image" $v.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- with $v.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: management, containerPort: {{ $v.managementPort }}}
+          # The embedding model, tokenizer and DJL natives are baked into the image, which already
+          # sets EMBEDDING_MODEL_URI, EMBEDDING_TOKENIZER_URI, DJL_CACHE_DIR and DJL_OFFLINE.
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.global.springProfile | quote }}
+            - name: MANAGEMENT_PORT
+              value: {{ $v.managementPort | quote }}
+            - name: OLLAMA_URL
+              value: {{ .Values.ollama.url | quote }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.ollama.model | quote }}
+            - name: OLLAMA_NUM_PREDICT
+              value: {{ .Values.ollama.numPredict | quote }}
+            # helpdesk.max-concurrent-requests (Spring's canonical env form drops the dashes).
+            - name: HELPDESK_MAXCONCURRENTREQUESTS
+              value: {{ $v.maxConcurrentRequests | quote }}
+            {{- with $v.rateLimitAsksPerMinute }}
+            - name: RATE_LIMIT_ASKS_PER_MINUTE
+              value: {{ . | quote }}
+            {{- end }}
+            # K6: base URLs; the assistant connects to <url>/mcp (Streamable HTTP, stateless).
+            - name: TICKETS_MCP_URL
+              value: {{ include "helpdesk.ticketServerUrl" $ | quote }}
+            - name: REQUEST_LOG_MCP_URL
+              value: {{ include "helpdesk.requestLogServerUrl" $ | quote }}
+            {{- include "helpdesk.secretEnv" (dict "name" "TICKETS_MCP_TOKEN" "secret" .Values.secrets.mcpTokens.name "key" .Values.secrets.mcpTokens.ticketsKey) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "REQUEST_LOG_MCP_TOKEN" "secret" .Values.secrets.mcpTokens.name "key" .Values.secrets.mcpTokens.requestLogKey) | nindent 12 }}
+            # K1/K2: bearer tokens from the OIDC provider.
+            - name: OIDC_ISSUER_URI
+              value: {{ required "oidc.issuerUri is required" .Values.oidc.issuerUri | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ .Values.oidc.audience | quote }}
+            {{- with .Values.oidc.jwkSetUri }}
+            - name: OIDC_JWK_SET_URI
+              value: {{ . | quote }}
+            {{- end }}
+            - name: OIDC_ROLES_CLAIM
+              value: {{ .Values.oidc.rolesClaim | quote }}
+            - name: OIDC_CUSTOMERS_CLAIM
+              value: {{ .Values.oidc.customersClaim | quote }}
+            {{- include "helpdesk.tracingEnv" $ | nindent 12 }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- include "helpdesk.actuatorProbes" (dict "port" "management" "values" $v) | trim | nindent 10 }}
+          {{- include "helpdesk.lifecycle" $v | trim | nindent 10 }}
+          {{- with $v.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "helpdesk.tmpVolumeMount" $ | nindent 12 }}
+            {{- with $v.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "helpdesk.tmpVolume" $ | nindent 8 }}
+        {{- with $v.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "helpdesk.selectorLabels" $ctx | nindent 4 }}
+  # Only the app port. The management port (actuator, /actuator/prometheus) is for the kubelet
+  # probes and for scraping pods directly, not for other services.
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+{{- include "helpdesk.pdb" $ctx }}
+{{- if $v.hpa.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "helpdesk.componentName" $ctx }}
+  # maxReplicas is bounded by Ollama's capacity (templates/validate.yaml, T3.6).
+  minReplicas: {{ $v.hpa.minReplicas }}
+  maxReplicas: {{ $v.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ $v.hpa.targetCPUUtilizationPercentage }}}
+    {{- if $v.hpa.inFlight.enabled }}
+    # Requests in flight per pod; needs a custom metrics adapter that serves this metric.
+    - type: Pods
+      pods:
+        metric: {name: {{ $v.hpa.inFlight.metricName }}}
+        target: {type: AverageValue, averageValue: {{ $v.hpa.inFlight.averageValue | quote }}}
+    {{- end }}
+  behavior:
+    # Answers take up to minutes; do not remove pods on a short dip.
+    scaleDown:
+      stabilizationWindowSeconds: 300
+{{- end }}

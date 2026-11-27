@@ -1,0 +1,98 @@
+{{- /*
+Ticket MCP server: one implementation per release (ticketServer.implementation), always behind the
+same Service name, so the assistant's TICKETS_MCP_URL does not depend on the choice.
+*/ -}}
+{{- $v := .Values.ticketServer -}}
+{{- $ctx := dict "root" $ "component" "ticket-mcp-server" "values" $v -}}
+{{- $java := eq $v.implementation "java" -}}
+{{- $impl := ternary $v.java $v.python $java -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+    helpdesk/implementation: {{ $v.implementation }}
+spec:
+  replicas: {{ $v.replicas }}
+  selector:
+    matchLabels:
+      {{- include "helpdesk.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helpdesk.labels" $ctx | nindent 8 }}
+        helpdesk/implementation: {{ $v.implementation }}
+      {{- with $v.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "helpdesk.podSpecCommon" $ctx | trim | nindent 6 }}
+      containers:
+        - name: ticket-mcp-server
+          image: {{ include "helpdesk.image" (dict "root" $ "image" $impl.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- with $v.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # K6/K7: MCP (Streamable HTTP, stateless) at /mcp and actuator health on the same port.
+          ports:
+            - {name: http, containerPort: 8081}
+          env:
+            {{- include "helpdesk.secretEnv" (dict "name" "MCP_SERVICE_TOKEN" "secret" .Values.secrets.mcpTokens.name "key" .Values.secrets.mcpTokens.ticketsKey) | nindent 12 }}
+            - name: MCP_ALLOWED_ORIGINS
+              value: {{ $v.allowedOrigins | quote }}
+            {{- if $java }}
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.global.springProfile | quote }}
+            - name: TICKETS_DB_URL
+              value: {{ required "ticketServer.java.db.url is required" $impl.db.url | quote }}
+            {{- with .Values.secrets.ticketsDb }}
+            {{- include "helpdesk.secretEnv" (dict "name" "TICKETS_DB_USER" "secret" .name "key" .userKey) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "TICKETS_DB_PASSWORD" "secret" .name "key" .passwordKey) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "TICKETS_DB_MIGRATION_USER" "secret" .name "key" .migrationUserKey "optional" true) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "TICKETS_DB_MIGRATION_PASSWORD" "secret" .name "key" .migrationPasswordKey "optional" true) | nindent 12 }}
+            {{- end }}
+            - name: TICKETS_DB_POOL_SIZE
+              value: {{ $impl.db.poolSize | quote }}
+            - name: TICKETS_DB_STATEMENT_TIMEOUT
+              value: {{ $impl.db.statementTimeout | quote }}
+            {{- include "helpdesk.tracingEnv" $ | nindent 12 }}
+            {{- else }}
+            - name: LOG_FORMAT
+              value: {{ $impl.logFormat | quote }}
+            {{- end }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- include "helpdesk.actuatorProbes" (dict "port" "http" "values" $v) | trim | nindent 10 }}
+          {{- include "helpdesk.lifecycle" $v | trim | nindent 10 }}
+          {{- with $impl.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "helpdesk.tmpVolumeMount" $ | nindent 12 }}
+            {{- with $v.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "helpdesk.tmpVolume" $ | nindent 8 }}
+        {{- with $v.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "helpdesk.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - {name: http, port: 8081, targetPort: http}
+{{- include "helpdesk.pdb" $ctx }}

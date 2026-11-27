@@ -1,0 +1,87 @@
+{{- $v := .Values.requestLogServer -}}
+{{- $ctx := dict "root" $ "component" "request-log-mcp-server" "values" $v -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ $v.replicas }}
+  selector:
+    matchLabels:
+      {{- include "helpdesk.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helpdesk.labels" $ctx | nindent 8 }}
+      {{- with $v.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "helpdesk.podSpecCommon" $ctx | trim | nindent 6 }}
+      containers:
+        - name: request-log-mcp-server
+          image: {{ include "helpdesk.image" (dict "root" $ "image" $v.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- with $v.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # K6/K7: MCP (Streamable HTTP, stateless) at /mcp and actuator health on the same port.
+          ports:
+            - {name: http, containerPort: 8082}
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.global.springProfile | quote }}
+            {{- include "helpdesk.secretEnv" (dict "name" "MCP_SERVICE_TOKEN" "secret" .Values.secrets.mcpTokens.name "key" .Values.secrets.mcpTokens.requestLogKey) | nindent 12 }}
+            - name: MCP_ALLOWED_ORIGINS
+              value: {{ $v.allowedOrigins | quote }}
+            - name: REQUEST_LOG_DB_URL
+              value: {{ required "requestLogServer.db.url is required" $v.db.url | quote }}
+            {{- with .Values.secrets.requestLogDb }}
+            {{- include "helpdesk.secretEnv" (dict "name" "REQUEST_LOG_DB_USER" "secret" .name "key" .userKey) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "REQUEST_LOG_DB_PASSWORD" "secret" .name "key" .passwordKey) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "REQUEST_LOG_DB_MIGRATION_USER" "secret" .name "key" .migrationUserKey "optional" true) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "REQUEST_LOG_DB_MIGRATION_PASSWORD" "secret" .name "key" .migrationPasswordKey "optional" true) | nindent 12 }}
+            {{- end }}
+            - name: REQUEST_LOG_DB_POOL_SIZE
+              value: {{ $v.db.poolSize | quote }}
+            - name: REQUEST_LOG_DB_STATEMENT_TIMEOUT
+              value: {{ $v.db.statementTimeout | quote }}
+            - name: REQUEST_LOG_RETENTION
+              value: {{ $v.retention | quote }}
+            {{- include "helpdesk.tracingEnv" $ | nindent 12 }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- include "helpdesk.actuatorProbes" (dict "port" "http" "values" $v) | trim | nindent 10 }}
+          {{- include "helpdesk.lifecycle" $v | trim | nindent 10 }}
+          {{- with $v.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "helpdesk.tmpVolumeMount" $ | nindent 12 }}
+            {{- with $v.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "helpdesk.tmpVolume" $ | nindent 8 }}
+        {{- with $v.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "helpdesk.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - {name: http, port: 8082, targetPort: http}
+{{- include "helpdesk.pdb" $ctx }}

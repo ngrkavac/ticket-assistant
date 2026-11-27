@@ -1,0 +1,39 @@
+name: Helm
+# Checks the Helm chart (T5.1-T5.3): helm lint and kubeconform for values-staging.yaml and
+# values-prod.yaml, plus the chart's guards. The commands are in deploy/helm/check.sh, which also
+# runs locally.
+on:
+  push:
+    branches: [main]
+    paths: [deploy/helm/**, .github/workflows/helm.yml]
+  pull_request:
+    paths: [deploy/helm/**, .github/workflows/helm.yml]
+# Least privilege for GITHUB_TOKEN.
+permissions:
+  contents: read
+concurrency:
+  group: helm-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # The tools run from images pinned by tag and digest (Renovate updates both, see the
+      # "renovate: docker" custom manager in renovate.json).
+      # renovate: docker
+      HELM_IMAGE: alpine/helm:3.17.3@sha256:d899e6316789fec04ee95300a18e454b7942539cbb3d89bde3e0655d6ca2e895
+      # renovate: docker
+      KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+    steps:
+      # Actions are pinned by commit SHA (tag in the comment); Renovate keeps both up to date.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Pull tools
+        run: docker pull -q "$HELM_IMAGE" && docker pull -q "$KUBECONFORM_IMAGE"
+      - name: Lint and validate the chart
+        working-directory: deploy/helm
+        run: |
+          export HELM="docker run --rm -i -v $PWD:/w -w /w $HELM_IMAGE"
+          export KUBECONFORM="docker run --rm -i $KUBECONFORM_IMAGE"
+          ./check.sh

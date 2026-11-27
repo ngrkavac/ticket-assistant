@@ -1,0 +1,131 @@
+{{- /*
+oauth2-proxy in front of the UI (K2). The same settings as docker-compose.yml, except: OIDC
+discovery (the issuer is reachable from the pod), a secure cookie, and reverse-proxy mode behind
+the Ingress (C11b). Its own template instead of the upstream chart: one pinned image, and the
+timeout chain and API routes stay next to the UI settings they must match.
+*/ -}}
+{{- $v := .Values.oauth2Proxy -}}
+{{- $ctx := dict "root" $ "component" "oauth2-proxy" "values" $v -}}
+{{- $s := .Values.secrets.oauth2Proxy -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ $v.replicas }}
+  selector:
+    matchLabels:
+      {{- include "helpdesk.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "helpdesk.labels" $ctx | nindent 8 }}
+      {{- with $v.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "helpdesk.podSpecCommon" $ctx | trim | nindent 6 }}
+      containers:
+        - name: oauth2-proxy
+          image: {{ include "helpdesk.image" (dict "root" $ "image" $v.image) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- with $v.extraArgs }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $v.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: 4180}
+          env:
+            - name: OAUTH2_PROXY_HTTP_ADDRESS
+              value: "0.0.0.0:4180"
+            - name: OAUTH2_PROXY_UPSTREAMS
+              value: {{ include "helpdesk.uiUrl" $ | quote }}
+            - name: OAUTH2_PROXY_PROVIDER
+              value: oidc
+            - name: OAUTH2_PROXY_PROVIDER_DISPLAY_NAME
+              value: {{ $v.providerDisplayName | quote }}
+            - name: OAUTH2_PROXY_OIDC_ISSUER_URL
+              value: {{ required "oidc.issuerUri is required" .Values.oidc.issuerUri | quote }}
+            {{- include "helpdesk.secretEnv" (dict "name" "OAUTH2_PROXY_CLIENT_ID" "secret" $s.name "key" $s.clientIdKey) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "OAUTH2_PROXY_CLIENT_SECRET" "secret" $s.name "key" $s.clientSecretKey) | nindent 12 }}
+            {{- include "helpdesk.secretEnv" (dict "name" "OAUTH2_PROXY_COOKIE_SECRET" "secret" $s.name "key" $s.cookieSecretKey) | nindent 12 }}
+            - name: OAUTH2_PROXY_CODE_CHALLENGE_METHOD
+              value: S256
+            - name: OAUTH2_PROXY_REDIRECT_URL
+              value: {{ printf "https://%s/oauth2/callback" (required "publicHost is required" .Values.publicHost) | quote }}
+            {{- with $v.backendLogoutUrl }}
+            # Sign-out also ends the provider session.
+            - name: OAUTH2_PROXY_BACKEND_LOGOUT_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: OAUTH2_PROXY_SCOPE
+              value: {{ $v.scope | quote }}
+            - name: OAUTH2_PROXY_EMAIL_DOMAINS
+              value: {{ $v.emailDomains | quote }}
+            - name: OAUTH2_PROXY_OIDC_GROUPS_CLAIM
+              value: {{ $v.groupsClaim | quote }}
+            # K2: the access token (aud=helpdesk-assistant) goes upstream in
+            # X-Forwarded-Access-Token; nginx in the UI turns it into "Authorization: Bearer".
+            - name: OAUTH2_PROXY_PASS_ACCESS_TOKEN
+              value: "true"
+            - name: OAUTH2_PROXY_SKIP_PROVIDER_BUTTON
+              value: "true"
+            # API calls without a session get 401 (the UI then signs in again), not a redirect.
+            - name: OAUTH2_PROXY_API_ROUTES
+              value: "^/(ask|requests|customers|questions)$"
+            - name: OAUTH2_PROXY_COOKIE_NAME
+              value: {{ $v.cookieName | quote }}
+            - name: OAUTH2_PROXY_COOKIE_SECURE
+              value: "true"
+            - name: OAUTH2_PROXY_COOKIE_SAMESITE
+              value: lax
+            - name: OAUTH2_PROXY_COOKIE_REFRESH
+              value: {{ $v.cookieRefresh | quote }}
+            - name: OAUTH2_PROXY_COOKIE_EXPIRE
+              value: {{ $v.cookieExpire | quote }}
+            # Longer than nginx's proxy_read_timeout (180s), shorter than the Ingress timeout.
+            - name: OAUTH2_PROXY_UPSTREAM_TIMEOUT
+              value: {{ $v.upstreamTimeout | quote }}
+            # Behind the Ingress: trust X-Forwarded-* for the client address and scheme.
+            - name: OAUTH2_PROXY_REVERSE_PROXY
+              value: "true"
+            - name: OAUTH2_PROXY_SILENCE_PING_LOGGING
+              value: "true"
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # /ping: the process is up. /ready: it can also serve requests.
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: {{ $v.readinessProbe.periodSeconds }}
+            failureThreshold: {{ $v.readinessProbe.failureThreshold }}
+          livenessProbe:
+            httpGet: {path: /ping, port: http}
+            periodSeconds: {{ $v.livenessProbe.periodSeconds }}
+            failureThreshold: {{ $v.livenessProbe.failureThreshold }}
+          {{- include "helpdesk.lifecycle" $v | trim | nindent 10 }}
+          {{- with $v.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "helpdesk.componentName" $ctx }}
+  labels:
+    {{- include "helpdesk.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "helpdesk.selectorLabels" $ctx | nindent 4 }}
+  # The Ingress (C11b) sends all browser traffic here.
+  ports:
+    - {name: http, port: 4180, targetPort: http}
+{{- include "helpdesk.pdb" $ctx }}

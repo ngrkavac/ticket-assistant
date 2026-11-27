@@ -32,9 +32,20 @@
       "groupName": "Rust non-major"
     },
     {
-      "matchManagers": ["dockerfile", "docker-compose"],
+      "matchManagers": ["dockerfile", "docker-compose", "helm-values", "custom.regex"],
       "matchUpdateTypes": ["minor", "patch", "digest"],
       "groupName": "Docker images non-major"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Tool images that workflows run with docker run (helm.yml): an env var after a '# renovate: docker' comment, pinned as image:tag@digest.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: docker\\s+[A-Z_]+:\\s*(?<depName>[^:\\s]+):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
     }
   ]
 }
