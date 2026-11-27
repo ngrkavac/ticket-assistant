@@ -1,16 +1,21 @@
 package com.example.assistant;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.modelcontextprotocol.client.McpSyncClient;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.mcp.McpToolFilter;
+import org.springframework.ai.mcp.McpToolNamePrefixGenerator;
+import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.execution.DefaultToolExecutionExceptionProcessor;
 import org.springframework.ai.tool.execution.ToolExecutionExceptionProcessor;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -75,6 +80,28 @@ class ChatConfig {
   @Bean
   ModelTools modelTools(ToolCallbackProvider mcpTools, MeterRegistry meters) {
     return new ModelTools(mcpTools, meters);
+  }
+
+  /**
+   * The MCP tools for the model: those of every connection except the request log, filtered by
+   * {@link #hideInternalTools}. It replaces Spring AI's provider ({@code
+   * spring.ai.mcp.client.toolcallback.enabled=false}), which lists the tools of every connection,
+   * so a request-log server that is down would fail every /ask. The tool list is cached until a
+   * server reports that its tools changed; a failed listing is not cached and is retried on the
+   * next request.
+   */
+  @Bean
+  SyncMcpToolCallbackProvider mcpToolCallbacks(
+      ObjectProvider<List<McpSyncClient>> clients, McpToolFilter filter, HelpdeskProperties props) {
+    String requestLog = props.requestLog().connection();
+    return SyncMcpToolCallbackProvider.builder()
+        .mcpClients(
+            clients.getIfAvailable(List::of).stream()
+                .filter(c -> !RequestLogClient.isConnection(c.getClientInfo(), requestLog))
+                .toList())
+        .toolFilter(filter)
+        .toolNamePrefixGenerator(McpToolNamePrefixGenerator.noPrefix())
+        .build();
   }
 
   /**

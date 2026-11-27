@@ -71,7 +71,9 @@ class TicketDirectoryClient {
     }
     McpSchema.CallToolResult result;
     try {
-      result = client.callTool(new McpSchema.CallToolRequest(TOOL, Map.of()));
+      result =
+          McpClientSupervisor.call(
+              TOOL, () -> client.callTool(new McpSchema.CallToolRequest(TOOL, Map.of())));
     } catch (RuntimeException e) {
       throw new TicketsUnavailableException(TOOL + " failed", e);
     }

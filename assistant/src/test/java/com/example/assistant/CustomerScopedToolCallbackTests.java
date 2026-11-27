@@ -43,6 +43,9 @@ class CustomerScopedToolCallbackTests {
 
   private RuntimeException failure;
 
+  /** How many calls throw {@link #failure} before the tool answers again. */
+  private int failures = Integer.MAX_VALUE;
+
   private ToolCallback tool(String name, String schema) {
     ToolDefinition definition =
         ToolDefinition.builder().name(name).description("d").inputSchema(schema).build();
@@ -60,7 +63,7 @@ class CustomerScopedToolCallbackTests {
       @Override
       public String call(String toolInput) {
         calls.add(toolInput);
-        if (failure != null) {
+        if (failure != null && failures-- > 0) {
           throw failure;
         }
         return result;
@@ -341,5 +344,51 @@ class CustomerScopedToolCallbackTests {
     assertThat(CustomerScopedToolCallback.resultId("{\"id\":{\"a\":1}}")).isNull();
     assertThat(CustomerScopedToolCallback.resultId("{\"id\":\" \"}")).isNull();
     assertThat(CustomerScopedToolCallback.resultId("\"T-1\"")).isNull();
+  }
+
+  /** How the MCP tool callback reports a call that ran into a lost session (server restart). */
+  private static ToolExecutionException sessionLost(String tool) {
+    return new ToolExecutionException(
+        ToolDefinition.builder().name(tool).description("d").inputSchema("{}").build(),
+        new RuntimeException(McpClientSupervisor.SESSION_TERMINATED));
+  }
+
+  @Test
+  void aReadToolIsCalledAgainAfterALostSession() {
+    failure = sessionLost("getTicket");
+    failures = 1;
+    ToolCallAudit audit = new ToolCallAudit();
+    assertThat(scoped().call("{\"id\":\"T-1001\"}", context("acme", ACME_AGENT, audit)))
+        .isEqualTo("result");
+    assertThat(calls).hasSize(2);
+    assertThat(audit.calls())
+        .extracting(ToolCallAudit.ToolCall::outcome)
+        .containsExactly(ToolCallAudit.SUCCESS);
+  }
+
+  @Test
+  void aReadToolIsNotCalledAgainForOtherFailures() {
+    failure =
+        new ToolExecutionException(
+            ToolDefinition.builder().name("getTicket").description("d").inputSchema("{}").build(),
+            new IllegalStateException("Ticket T-1234 not found"));
+    failures = 1;
+    assertThatThrownBy(() -> scoped().call("{\"id\":\"T-1234\"}", context("acme", ACME_AGENT)))
+        .isSameAs(failure);
+    assertThat(calls).hasSize(1);
+  }
+
+  @Test
+  void aWriteToolIsNeverCalledAgain() {
+    failure = sessionLost("createTicket");
+    failures = 1;
+    ToolCallAudit audit = new ToolCallAudit();
+    assertThatThrownBy(
+            () -> createTicket().call("{\"subject\":\"VPN\"}", context("acme", ACME_WRITER, audit)))
+        .isSameAs(failure);
+    assertThat(calls).hasSize(1);
+    assertThat(audit.calls())
+        .extracting(ToolCallAudit.ToolCall::outcome)
+        .containsExactly(ToolCallAudit.ERROR);
   }
 }

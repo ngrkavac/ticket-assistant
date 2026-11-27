@@ -128,7 +128,7 @@ class RequestLogClient implements DisposableBean {
                 new IllegalStateException(
                     "helpdesk.request-log.enabled=true but no MCP client connection '"
                         + connection
-                        + "' is configured (spring.ai.mcp.client.sse.connections."
+                        + "' is configured (spring.ai.mcp.client.streamable-http.connections."
                         + connection
                         + ".url)"));
   }
@@ -197,7 +197,10 @@ class RequestLogClient implements DisposableBean {
 
   private void send(String requestId, Map<String, Object> args) {
     try {
-      McpSchema.CallToolResult result = client.callTool(new McpSchema.CallToolRequest(TOOL, args));
+      // the request id is unique on the server, so a repeated write cannot store the request twice
+      McpSchema.CallToolResult result =
+          McpClientSupervisor.call(
+              TOOL, () -> client.callTool(new McpSchema.CallToolRequest(TOOL, args)));
       if (Boolean.TRUE.equals(result.isError())) {
         failed.increment();
         log.warn("Request {} not stored: request-log server returned an error", requestId);
@@ -261,7 +264,9 @@ class RequestLogClient implements DisposableBean {
     }
     McpSchema.CallToolResult result;
     try {
-      result = client.callTool(new McpSchema.CallToolRequest(tool, args));
+      result =
+          McpClientSupervisor.call(
+              tool, () -> client.callTool(new McpSchema.CallToolRequest(tool, args)));
     } catch (RuntimeException e) {
       throw new RequestLogUnavailableException(tool + " failed", e);
     }

@@ -18,7 +18,6 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.embedding.EmbeddingResponse;
-import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -155,11 +154,6 @@ class AssistantIntegrationTests {
     ChatModel chatModel() {
       return prompt ->
           new ChatResponse(List.of(new Generation(new AssistantMessage(promptText(prompt)))));
-    }
-
-    @Bean
-    ToolCallbackProvider noTools() {
-      return () -> new org.springframework.ai.tool.ToolCallback[0];
     }
 
     private static String promptText(Prompt prompt) {
