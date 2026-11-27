@@ -267,8 +267,8 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **A8** **[L]** (T1.4) `CustomerScopedToolCallback` using the ToolContext. Hide `listCustomers` from the model and stop sending the customer as user text.
 - [x] **A9** (T1.5) Filter tools per request, so `createTicket` is offered only to users with `tickets-write`. Collect tool-call audit records.
 - [x] **A10** (T1.5, T1.6, client side) Send `userSubject` and `toolCalls` per K4. ⛓ B3.
-- [ ] **A11** (T1.8) Per-user rate limit with Bucket4j (`RATE_LIMIT_ASKS_PER_MINUTE`).
-- [ ] **A12** (T1.9) Auth/authz test matrix (endpoint × role × customer) and a cross-customer integration test with a fake model.
+- [x] **A11** (T1.8) Per-user rate limit with Bucket4j (`RATE_LIMIT_ASKS_PER_MINUTE`).
+- [x] **A12** (T1.9) Auth/authz test matrix (endpoint × role × customer) and a cross-customer integration test with a fake model.
 - [ ] **A13** (T3.3) Health indicators `ticketsMcp`, `requestLogMcp` and `ollama`; readiness group.
 - [x] **A14** (T3.4, client side) Send the service tokens per K5. Harmless before B9 merges.
 - [x] **A15** **[L]** (T3.1 client side + T3.2) Streamable HTTP connections, lazy MCP initialization and reconnect, with a test that restarts a server. ⛓ merges together with B10 (S2).
@@ -308,7 +308,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **C8** (T5.9) Compose: pin image tags and digests (Ollama, Postgres, nginx, Keycloak), add a tickets database and the env vars from K5/K8. Label the `rust` profile as legacy (D2).
 - [x] **C9** (T6.2) Image build and push to GHCR, Trivy scan, CycloneDX SBOM, cosign signing.
 - [x] **C10** (T3.5, image side) Bake the ONNX model and tokenizer into the assistant image at the paths from K8. ⛓ A16.
-- [ ] **C11a** **[L]** (T5.1, T5.2, T5.3) Helm chart skeleton covering all services, probes per K7, resources, PDB/HPA, values for staging and prod, and `helm lint` plus `kubeconform` in CI.
+- [x] **C11a** **[L]** (T5.1, T5.2, T5.3) Helm chart skeleton covering all services, probes per K7, resources, PDB/HPA, values for staging and prod, and `helm lint` plus `kubeconform` in CI.
 - [ ] **C11b** **[L]** (T5.4–T5.7) Security contexts, ServiceAccounts, NetworkPolicies, Ingress with TLS and security headers, External Secrets.
 - [ ] **C11c** **[L]** (T3.6, T3.7, T2.7) Ollama StatefulSet with a GPU node pool, model-pull Job and PVC; KB ConfigMap with a checksum roll; Postgres via CloudNativePG or a managed service, with backups.
 - [x] **C12** (T6.5) E2E smoke job: compose, a tiny Ollama model and a Keycloak test user. ⛓ A7, B7, C7.
