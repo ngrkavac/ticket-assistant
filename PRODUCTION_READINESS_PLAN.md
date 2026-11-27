@@ -271,7 +271,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [ ] **A12** (T1.9) Auth/authz test matrix (endpoint × role × customer) and a cross-customer integration test with a fake model.
 - [ ] **A13** (T3.3) Health indicators `ticketsMcp`, `requestLogMcp` and `ollama`; readiness group.
 - [x] **A14** (T3.4, client side) Send the service tokens per K5. Harmless before B9 merges.
-- [ ] **A15** **[L]** (T3.1 client side + T3.2) Streamable HTTP connections, lazy MCP initialization and reconnect, with a test that restarts a server. ⛓ merges together with B10 (S2).
+- [x] **A15** **[L]** (T3.1 client side + T3.2) Streamable HTTP connections, lazy MCP initialization and reconnect, with a test that restarts a server. ⛓ merges together with B10 (S2).
 - [x] **A16** (T3.5, config side) Make the embedding model and tokenizer URIs configurable (`EMBEDDING_MODEL_URI`, `EMBEDDING_TOKENIZER_URI`).
 - [ ] **A17** (T4.1, T4.2, T4.4) For the assistant: JSON logs in `prod`, OTel tracing, and business metrics per K9.
 - [ ] **A18** (T5.8) `application-prod.properties` and fail-fast validation of the required properties.
@@ -288,7 +288,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **B7** **[L]** (T2.1) Postgres-backed `TicketTools`: Flyway schema, sequence-based ids, demo seed only in `local`. Add Testcontainers tests; the contract tests must still pass. ⛓ C8 for compose (until then, use Testcontainers).
 - [x] **B8** (T2.3, T2.6) Least-privilege DB users and timeouts for the ticket server.
 - [x] **B9** (T3.4, server side) Service-token filter and Origin check per K5 on both Java servers and the Python server (and Rust, if it is kept).
-- [ ] **B10** **[L]** (T3.1, server side) Streamable HTTP on the Java and Python servers. Rust stays on SSE (D2). Make the contract tests transport-selectable, update the `contract` CI job (Rust runs with `sse`) and `.mcp.json`, and write `ticket-mcp-server-rust/README.md` documenting its legacy status. ⛓ merges together with A15 (S2).
+- [x] **B10** **[L]** (T3.1, server side) Streamable HTTP on the Java and Python servers. Rust stays on SSE (D2). Make the contract tests transport-selectable, update the `contract` CI job (Rust runs with `sse`) and `.mcp.json`, and write `ticket-mcp-server-rust/README.md` documenting its legacy status. ⛓ merges together with A15 (S2).
 - [x] **B11** (T4.1, T4.2, T4.3) For the MCP servers: JSON logs in `prod`, tracing, and `/actuator/prometheus`.
 - [x] **B12** (T5.8) `prod` profiles with fail-fast validation on both Java servers.
 - [ ] **B13** (T6.4) k6 load-test script `perf/ask.js` and a results template. It runs against staging after C11c.
@@ -307,7 +307,7 @@ Legend: ⛓ = depends on another stream's task being merged. **[L]** = large tas
 - [x] **C7** **[L]** (T1.7) oauth2-proxy in compose, nginx forwarding `Authorization` per K2, UI redirect to sign-in on 401, user menu and logout, API-key wording removed. ⛓ the end-to-end check needs A5–A7; the UI part can be built against K2/K3 first.
 - [x] **C8** (T5.9) Compose: pin image tags and digests (Ollama, Postgres, nginx, Keycloak), add a tickets database and the env vars from K5/K8. Label the `rust` profile as legacy (D2).
 - [x] **C9** (T6.2) Image build and push to GHCR, Trivy scan, CycloneDX SBOM, cosign signing.
-- [ ] **C10** (T3.5, image side) Bake the ONNX model and tokenizer into the assistant image at the paths from K8. ⛓ A16.
+- [x] **C10** (T3.5, image side) Bake the ONNX model and tokenizer into the assistant image at the paths from K8. ⛓ A16.
 - [ ] **C11a** **[L]** (T5.1, T5.2, T5.3) Helm chart skeleton covering all services, probes per K7, resources, PDB/HPA, values for staging and prod, and `helm lint` plus `kubeconform` in CI.
 - [ ] **C11b** **[L]** (T5.4–T5.7) Security contexts, ServiceAccounts, NetworkPolicies, Ingress with TLS and security headers, External Secrets.
 - [ ] **C11c** **[L]** (T3.6, T3.7, T2.7) Ollama StatefulSet with a GPU node pool, model-pull Job and PVC; KB ConfigMap with a checksum roll; Postgres via CloudNativePG or a managed service, with backups.
